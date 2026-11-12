@@ -1,0 +1,35 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Web
+node_modules/
+web/dist/
+web/.vite/
+
+# Local environment & runtime data
+.env
+.env.*
+!.env.example
+
+# Offline ONNX model weights (keep .gitkeep)
+models/astrlink-guard/int8/*
+!models/astrlink-guard/int8/.gitkeep
+models/astrlink-guard/fp32/*
+models/astrlink-guard/fp16/*
+
+# Ephemeral uploads & masked output artifacts (keep .gitkeep)
+data/tmp_uploads/*
+!data/tmp_uploads/.gitkeep
+data/artifacts/*
+!data/artifacts/.gitkeep
+
+# Local SQLite test files
+*.db
+*.sqlite3
