@@ -10,6 +10,7 @@ import secrets
 import threading
 import time
 from typing import Any
+import weakref
 
 from fastapi import FastAPI
 from sqlalchemy import func, select
@@ -509,7 +510,7 @@ class JobRunner:
 
 
 def ensure_static_pool_thread_safe(app: FastAPI) -> None:
-    """Serialize StaticPool single-connection checkouts across threads (reentrant per thread)."""
+    """Serialize StaticPool single-connection checkouts across threads (reentrant & nested-safe per thread)."""
     db_engine = getattr(app.state, "db_engine", None)
     pool = getattr(db_engine, "pool", None)
     if not isinstance(pool, StaticPool) or getattr(pool, "_ds_serialized", False):
@@ -517,40 +518,50 @@ def ensure_static_pool_thread_safe(app: FastAPI) -> None:
 
     cond = threading.Condition()
     state: dict[str, int | None] = {"owner": None, "count": 0}
-    orig_do_get = pool._do_get
-    orig_do_return = pool._do_return_conn
+    orig_connect = pool.connect
 
-    def _locked_do_get():
+    def _acquire() -> None:
         tid = threading.get_ident()
         with cond:
             while (state["count"] or 0) > 0 and state["owner"] != tid:
                 cond.wait()
             state["owner"] = tid
             state["count"] = (state["count"] or 0) + 1
+
+    def _release_once(flag: list[bool]) -> None:
+        with cond:
+            if flag[0]:
+                return
+            flag[0] = True
+            rem = max(0, (state["count"] or 0) - 1)
+            state["count"] = rem
+            if rem == 0:
+                state["owner"] = None
+                cond.notify_all()
+
+    def _locked_connect():
+        _acquire()
+        flag = [False]
         try:
-            return orig_do_get()
+            fairy = orig_connect()
         except BaseException:
-            with cond:
-                rem = max(0, (state["count"] or 0) - 1)
-                state["count"] = rem
-                if rem == 0:
-                    state["owner"] = None
-                    cond.notify_all()
+            _release_once(flag)
             raise
 
-    def _locked_do_return(record):
-        try:
-            return orig_do_return(record)
-        finally:
-            with cond:
-                rem = max(0, (state["count"] or 0) - 1)
-                state["count"] = rem
-                if rem == 0:
-                    state["owner"] = None
-                    cond.notify_all()
+        orig_checkin = fairy._checkin
+        fin = weakref.finalize(fairy, _release_once, flag)
 
-    pool._do_get = _locked_do_get  # type: ignore[method-assign]
-    pool._do_return_conn = _locked_do_return  # type: ignore[method-assign]
+        def _wrapped_checkin(transaction_was_reset: bool = False) -> None:
+            try:
+                orig_checkin(transaction_was_reset=transaction_was_reset)
+            finally:
+                fin.detach()
+                _release_once(flag)
+
+        fairy._checkin = _wrapped_checkin  # type: ignore[method-assign]
+        return fairy
+
+    pool.connect = _locked_connect  # type: ignore[method-assign]
     setattr(pool, "_ds_serialized", True)
 
 
