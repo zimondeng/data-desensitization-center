@@ -605,3 +605,62 @@ def test_engine_validation_rejects_invalid_jsonpath_regex_and_policy_parameters_
     assert exc_regex.value.code == 40001
 
 
+def test_array_jsonpath_rules_and_single_index_leaf_resolution() -> None:
+    from types import SimpleNamespace
+
+    from app.engine.field_router import _extract_datum_leaf_keys
+
+    # 1. Compatibility regression: path objects exposing `.index` (int) rather than `.indices`
+    arr = ["13800138000", "13900139000", "13700137000"]
+    datum_pos = SimpleNamespace(
+        value=arr[0],
+        path=SimpleNamespace(index=0),
+        context=SimpleNamespace(value=arr),
+    )
+    datum_neg = SimpleNamespace(
+        value=arr[-1],
+        path=SimpleNamespace(index=-1),
+        context=SimpleNamespace(value=arr),
+    )
+    assert _extract_datum_leaf_keys(datum_pos) == [(id(arr), 0)]
+    assert _extract_datum_leaf_keys(datum_neg) == [(id(arr), 2)]
+
+    # 2. End-to-end array JSONPath rules (`[*]`, `[0]`, `[-1]`, `[0:2]`) override default_role
+    pipeline = HybridDetectorPipeline(onnx_detector=_ScriptedFakeOnnx([]))
+    try:
+        engine = PolicyEngineService(pipeline=pipeline, hash_salt="unit-salt")
+        snapshot = engine.build_inline_snapshot(
+            scope_mode="CONVERSATION",
+            entity_rules={
+                "phone": {"enabled": True, "min_score": 0.5, "action": "PLACEHOLDER"},
+                "cn_mobile": {"enabled": True, "min_score": 0.5, "action": "PLACEHOLDER"},
+            },
+            field_role_rules={
+                "default_role": "FULL_MASK_WRITE_SCOPE",
+                "rules": [
+                    {"jsonpath": "$.items[*]", "role": "PASSTHROUGH"},
+                    {"jsonpath": "$.first_only[0]", "role": "PASSTHROUGH"},
+                    {"jsonpath": "$.last_only[-1]", "role": "PASSTHROUGH"},
+                    {"jsonpath": "$.slice_only[0:2]", "role": "PASSTHROUGH"},
+                ],
+            },
+        )
+        payload = {
+            "items": ["13811112222", "13911112222"],
+            "first_only": ["13822223333", "13922223333"],
+            "last_only": ["13833334444", "13933334444"],
+            "slice_only": ["13844445555", "13944445555", "13744445555"],
+        }
+        res = engine.mask_structured_record(payload, snapshot)
+        assert res.masked_payload["items"] == ["13811112222", "13911112222"]
+        assert res.masked_payload["first_only"][0] == "13822223333"
+        assert res.masked_payload["first_only"][1] == "<PHONE_1>"
+        assert res.masked_payload["last_only"][0] == "<PHONE_2>"
+        assert res.masked_payload["last_only"][1] == "13933334444"
+        assert res.masked_payload["slice_only"][:2] == ["13844445555", "13944445555"]
+        assert res.masked_payload["slice_only"][2] == "<PHONE_3>"
+    finally:
+        pipeline.shutdown()
+
+
+

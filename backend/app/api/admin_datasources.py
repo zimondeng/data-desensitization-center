@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import re
 import time
 from typing import Any
@@ -11,7 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
-from app.common.envelope import ok_response
+from app.common.envelope import format_optional_utc_ms, ok_response
 from app.common.errors import BadRequestError, NotFoundError
 from app.config import get_request_settings
 from app.db.base import new_uuid, utcnow
@@ -28,14 +27,6 @@ router = APIRouter(prefix="/api/admin/datasources", tags=["admin-datasources"])
 
 _CONN_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _DATASOURCE_STATUSES = frozenset({"ACTIVE", "DISABLED"})
-
-
-def _fmt_dt(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.isoformat(timespec="milliseconds") + "Z"
 
 
 def _serialize_datasource(row: DatasourceConn) -> dict[str, Any]:
@@ -55,10 +46,10 @@ def _serialize_datasource(row: DatasourceConn) -> dict[str, Any]:
         "allowed_tables_json": list(tables),
         "status": row.status,
         "last_test_ok": None if row.last_test_ok is None else bool(row.last_test_ok),
-        "last_tested_at": _fmt_dt(row.last_tested_at),
+        "last_tested_at": format_optional_utc_ms(row.last_tested_at),
         "created_by": row.created_by,
-        "create_time": _fmt_dt(row.create_time),
-        "update_time": _fmt_dt(row.update_time),
+        "create_time": format_optional_utc_ms(row.create_time),
+        "update_time": format_optional_utc_ms(row.update_time),
     }
 
 
@@ -344,7 +335,7 @@ def test_datasource_connectivity(
                 "ok": False,
                 "read_only_verified": False,
                 "last_test_ok": False,
-                "last_tested_at": _fmt_dt(row.last_tested_at),
+                "last_tested_at": format_optional_utc_ms(row.last_tested_at),
                 "latency_ms": 0,
                 "message": "Stored datasource credential decryption failed",
             },
@@ -370,7 +361,7 @@ def test_datasource_connectivity(
                 "ok": True,
                 "read_only_verified": True,
                 "last_test_ok": True,
-                "last_tested_at": _fmt_dt(row.last_tested_at),
+                "last_tested_at": format_optional_utc_ms(row.last_tested_at),
                 "latency_ms": latency_ms,
                 "message": "Read-only session verified (SET SESSION TRANSACTION READ ONLY + SELECT 1)",
             },
@@ -388,7 +379,7 @@ def test_datasource_connectivity(
                 "ok": False,
                 "read_only_verified": False,
                 "last_test_ok": False,
-                "last_tested_at": _fmt_dt(row.last_tested_at),
+                "last_tested_at": format_optional_utc_ms(row.last_tested_at),
                 "latency_ms": elapsed_ms,
                 "message": f"Read-only connectivity check failed ({exc.__class__.__name__})",
             },

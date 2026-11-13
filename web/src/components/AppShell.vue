@@ -109,7 +109,7 @@
             {{
               authStore.onnxReady
                 ? `ONNX 引擎就绪 (${authStore.onnxVariant})`
-                : 'ONNX 模型未挂载（仅正则可用）'
+                : 'ONNX 模型未挂载（启用 NER 策略将返回 50301）'
             }}
           </el-tag>
 

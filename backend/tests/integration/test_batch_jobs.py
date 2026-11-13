@@ -1212,5 +1212,147 @@ def test_mid_write_cancellation_on_windows_and_immutable_policy_version_snapshot
         pipeline.shutdown()
 
 
+def test_job_creation_never_leaks_unmasked_job_name_and_leaves_zero_orphan_pending_rows(
+    test_settings: Any,
+    isolated_dirs: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import BatchJob
+    from app.jobs.runner import get_or_create_job_runner
+    from app.main import create_app
+
+    # Case 1: Missing ONNX weights on gov_eval_corpus -> must propagate 50301 instead of saving raw PII job_name
+    app_no_onnx = create_app(settings=test_settings)
+    broken_pipeline = HybridDetectorPipeline(onnx_detector=None)
+    app_no_onnx.state.policy_engine = PolicyEngineService(
+        pipeline=broken_pipeline,
+        hash_salt="batch-fail-salt",
+    )
+    try:
+        with TestClient(app_no_onnx) as client:
+            tokens = _seed_auth_principals(client, app_no_onnx, test_settings)
+            admin_hdr = {"Authorization": f"Bearer {tokens['ADMIN']}"}
+            op_hdr = {"Authorization": f"Bearer {tokens['OPERATOR']}"}
+            raw_pii_name = "张三手机号13812345678任务"
+
+            r_ds_no_onnx = client.post(
+                "/api/admin/datasources",
+                headers=admin_hdr,
+                json={
+                    "conn_code": "ro_no_onnx_ds",
+                    "conn_name": "只读库",
+                    "db_host": "127.0.0.1",
+                    "db_port": 3306,
+                    "db_name": "gov_db",
+                    "db_user": "ro",
+                    "password": "ro_secret_password",
+                    "allowed_tables": ["qa_records"],
+                },
+            )
+            assert r_ds_no_onnx.status_code == 200
+
+            r_fail = client.post(
+                "/api/v1/jobs/file",
+                headers=op_hdr,
+                data={"job_name": raw_pii_name, "policy_code": "gov_eval_corpus"},
+                files={"file": ("raw_张三.txt", "hello\n".encode("utf-8"), "text/plain")},
+            )
+            assert r_fail.status_code == 503
+            assert r_fail.json()["code"] == 50301
+
+            r_mysql_fail = client.post(
+                "/api/admin/jobs/mysql-sample",
+                headers=admin_hdr,
+                json={
+                    "job_name": raw_pii_name,
+                    "datasource_code": "ro_no_onnx_ds",
+                    "table_name": "qa_records",
+                    "select_columns": ["id", "content"],
+                    "limit_rows": 10,
+                    "policy_code": "gov_eval_corpus",
+                },
+            )
+            assert r_mysql_fail.status_code == 503
+            assert r_mysql_fail.json()["code"] == 50301
+
+            with app_no_onnx.state.session_factory() as session:
+                jobs = session.scalars(select(BatchJob)).all()
+                assert jobs == []
+            assert list(isolated_dirs["tmp_uploads_dir"].iterdir()) == []
+    finally:
+        broken_pipeline.shutdown()
+
+    # Case 2: Runner submission failure after commit -> must clean up PENDING row & tmp upload
+    app_submit_fail = create_app(settings=test_settings)
+    pipeline = HybridDetectorPipeline(onnx_detector=_ScriptedFakeOnnx([("张三", "private_person", 0.99)]))
+    app_submit_fail.state.policy_engine = PolicyEngineService(
+        pipeline=pipeline,
+        hash_salt="batch-submit-fail-salt",
+    )
+    try:
+        with TestClient(app_submit_fail, raise_server_exceptions=False) as client:
+            tokens = _seed_auth_principals(client, app_submit_fail, test_settings)
+            admin_hdr = {"Authorization": f"Bearer {tokens['ADMIN']}"}
+            op_hdr = {"Authorization": f"Bearer {tokens['OPERATOR']}"}
+
+            # Create datasource for mysql-sample check
+            r_ds = client.post(
+                "/api/admin/datasources",
+                headers=admin_hdr,
+                json={
+                    "conn_code": "ro_fail_ds",
+                    "conn_name": "只读库",
+                    "db_host": "127.0.0.1",
+                    "db_port": 3306,
+                    "db_name": "gov_db",
+                    "db_user": "ro",
+                    "password": "ro_secret_password",
+                    "allowed_tables": ["qa_records"],
+                },
+            )
+            assert r_ds.status_code == 200
+
+            runner = get_or_create_job_runner(app_submit_fail)
+
+            def _boom_file(spec: Any) -> None:
+                raise RuntimeError("simulated file executor failure")
+
+            def _boom_mysql(spec: Any) -> None:
+                raise RuntimeError("simulated mysql executor failure")
+
+            monkeypatch.setattr(runner, "submit_file_job", _boom_file)
+            monkeypatch.setattr(runner, "submit_mysql_job", _boom_mysql)
+
+            r_file_err = client.post(
+                "/api/v1/jobs/file",
+                headers=op_hdr,
+                data={"job_name": "普通任务名", "policy_code": "gov_eval_corpus"},
+                files={"file": ("sample.txt", "hello\n".encode("utf-8"), "text/plain")},
+            )
+            assert r_file_err.status_code == 500
+            assert list(isolated_dirs["tmp_uploads_dir"].iterdir()) == []
+
+            r_mysql_err = client.post(
+                "/api/admin/jobs/mysql-sample",
+                headers=admin_hdr,
+                json={
+                    "job_name": "MySQL失败任务",
+                    "datasource_code": "ro_fail_ds",
+                    "table_name": "qa_records",
+                    "select_columns": ["id", "content"],
+                    "limit_rows": 10,
+                    "policy_code": "gov_eval_corpus",
+                },
+            )
+            assert r_mysql_err.status_code == 500
+
+            with app_submit_fail.state.session_factory() as session:
+                orphan_jobs = session.scalars(select(BatchJob)).all()
+                assert orphan_jobs == []
+    finally:
+        pipeline.shutdown()
+
+
+
 
 

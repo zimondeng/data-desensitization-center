@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { defineAsyncComponent, ref } from 'vue'
 import ApiKeysTab from '@/views/settings/ApiKeysTab.vue'
 import DatasourcesTab from '@/views/settings/DatasourcesTab.vue'
-import TelemetryTab from '@/views/settings/TelemetryTab.vue'
+
+const TelemetryTab = defineAsyncComponent(() => import('@/views/settings/TelemetryTab.vue'))
 
 type SettingsTabKey = 'telemetry' | 'api-keys' | 'datasources'
 const activeTab = ref<SettingsTabKey>('telemetry')

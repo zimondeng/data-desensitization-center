@@ -143,4 +143,45 @@ describe('Slice 4: AllowlistsView CRUD, inline match tester, zero persistence & 
     postSpy.mockRestore()
     deleteSpy.mockRestore()
   })
+
+  it('requires non-empty apply_labels with inline validation error before submitting create', async () => {
+    const auth = useAuthStore()
+    auth.setSession('jwt-op', {
+      uuid: 'u-op',
+      username: 'op1',
+      display_name: '操作员',
+      role: 'OPERATOR',
+    })
+
+    const getSpy = vi.spyOn(http, 'get').mockResolvedValue({
+      data: { code: 200, message: 'ok', request_id: 'r1', data: makeAllowlistResponse() },
+    } as never)
+    const postSpy = vi.spyOn(http, 'post')
+
+    const wrapper = mount(AllowlistsView)
+    await new Promise((r) => setTimeout(r, 30))
+
+    await wrapper.find('[data-testid="add-allowlist-btn"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(wrapper.text()).toContain('作用实体类别（必填，至少选择 1 类）')
+    await wrapper.find('#drawer-group-code').setValue('gov_custom')
+    await wrapper.find('#drawer-item-name').setValue('测试豁免规则')
+    await wrapper.find('#drawer-pattern-text').setValue('10086')
+    for (const closeBtn of wrapper.findAll('.el-drawer .el-tag__close')) {
+      await closeBtn.trigger('click')
+    }
+
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('创建规则'))
+    expect(submitBtn).toBeDefined()
+    await submitBtn!.trigger('click')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(wrapper.text()).toContain('请至少选择 1 类作用实体')
+    expect(postSpy).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    getSpy.mockRestore()
+    postSpy.mockRestore()
+  })
 })

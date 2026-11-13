@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from fastapi import Request
+
+
+def normalize_utc_naive(dt: datetime) -> datetime:
+    """Convert an aware or naive datetime to UTC-naive."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def format_utc_ms(dt: datetime) -> str:
+    """Format a datetime as UTC ISO-8601 with millisecond precision and trailing 'Z'."""
+    return normalize_utc_naive(dt).isoformat(timespec="milliseconds") + "Z"
+
+
+def format_optional_utc_ms(dt: datetime | None) -> str | None:
+    """Format an optional datetime as UTC millisecond ISO-8601, preserving None."""
+    return None if dt is None else format_utc_ms(dt)
 
 
 def generate_request_id() -> str:

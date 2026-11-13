@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StatusTag from '@/components/StatusTag.vue'
+import { extractErrorMessage } from '@/api/client'
 import {
   createAllowlistItem,
   deleteAllowlistItem,
@@ -69,7 +70,7 @@ function getMatchModeMeta(mode: AllowlistMatchMode) {
 }
 
 function formatApplyLabels(labels: string[]): string {
-  if (!labels || labels.length === 0) return '全部实体（全局豁免）'
+  if (!labels || labels.length === 0) return '未指定实体（请至少选择 1 类）'
   return labels.map((l) => `${ENTITY_LABEL_ZH_MAP[l] ?? l} (${l})`).join('、')
 }
 
@@ -81,7 +82,7 @@ async function loadData() {
     items.value = res.items ?? []
     groups.value = res.groups ?? []
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : '加载白名单列表失败'
+    loadError.value = extractErrorMessage(err, '加载白名单列表失败')
   } finally {
     loading.value = false
   }
@@ -114,7 +115,7 @@ async function runInlineTest() {
       include_saved: tester.include_saved,
     })
   } catch (err) {
-    testError.value = err instanceof Error ? err.message : '白名单测试请求失败'
+    testError.value = extractErrorMessage(err, '白名单测试请求失败')
   } finally {
     testRunning.value = false
   }
@@ -135,7 +136,7 @@ async function handleToggleEnabled(item: AllowlistItem, nextVal: boolean) {
     ElMessage.success(nextVal ? '规则已启用' : '规则已停用')
     await loadData()
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '更新状态失败')
+    ElMessage.error(extractErrorMessage(err, '更新状态失败'))
   }
 }
 
@@ -176,6 +177,7 @@ const drawerErrors = reactive({
   group_code: '',
   item_name: '',
   pattern_text: '',
+  apply_labels: '',
   general: '',
 })
 
@@ -183,6 +185,7 @@ function resetDrawerErrors() {
   drawerErrors.group_code = ''
   drawerErrors.item_name = ''
   drawerErrors.pattern_text = ''
+  drawerErrors.apply_labels = ''
   drawerErrors.general = ''
 }
 
@@ -218,14 +221,22 @@ async function handleDrawerSubmit() {
   resetDrawerErrors()
   if (!drawerForm.group_code.trim()) {
     drawerErrors.group_code = '请填写规则分组编码'
-    return
   }
   if (!drawerForm.item_name.trim()) {
     drawerErrors.item_name = '请填写规则名称'
-    return
   }
   if (!drawerForm.pattern_text.trim()) {
     drawerErrors.pattern_text = '请填写匹配表达式或固定串'
+  }
+  if (!drawerForm.apply_labels || drawerForm.apply_labels.length === 0) {
+    drawerErrors.apply_labels = '请至少选择 1 类作用实体'
+  }
+  if (
+    drawerErrors.group_code ||
+    drawerErrors.item_name ||
+    drawerErrors.pattern_text ||
+    drawerErrors.apply_labels
+  ) {
     return
   }
 
@@ -250,7 +261,7 @@ async function handleDrawerSubmit() {
     drawerOpen.value = false
     await loadData()
   } catch (err) {
-    drawerErrors.general = err instanceof Error ? err.message : '保存白名单规则失败'
+    drawerErrors.general = extractErrorMessage(err, '保存白名单规则失败')
   } finally {
     drawerSubmitting.value = false
   }
@@ -560,13 +571,14 @@ onMounted(() => {
           </div>
 
           <div class="form-field">
-            <label class="form-label" for="drawer-apply-labels">作用实体类别（留空表示匹配全部实体）</label>
+            <label class="form-label" for="drawer-apply-labels">作用实体类别（必填，至少选择 1 类）</label>
             <el-select
               id="drawer-apply-labels"
               v-model="drawerForm.apply_labels"
               multiple
               filterable
               style="width: 100%"
+              @change="drawerErrors.apply_labels = ''"
             >
               <el-option
                 v-for="meta in ENTITY_LABEL_META"
@@ -575,6 +587,9 @@ onMounted(() => {
                 :value="meta.label"
               />
             </el-select>
+            <div v-if="drawerErrors.apply_labels" class="field-error-text">
+              {{ drawerErrors.apply_labels }}
+            </div>
           </div>
 
           <div class="form-field">
@@ -712,27 +727,6 @@ onMounted(() => {
 
 .table-scroll-wrap {
   overflow-x: auto;
-}
-
-.ds-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.ds-data-table th,
-.ds-data-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--ds-border-subtle);
-  text-align: left;
-  vertical-align: middle;
-}
-
-.ds-data-table th {
-  background: var(--ds-bg-panel);
-  color: var(--ds-text-secondary);
-  font-weight: 600;
-  font-size: 0.8125rem;
 }
 
 .rule-name-cell {

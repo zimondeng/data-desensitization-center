@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StatusTag from '@/components/StatusTag.vue'
+import { extractErrorMessage } from '@/api/client'
 import {
   createDatasource,
   deleteDatasource,
@@ -33,7 +34,7 @@ async function loadData() {
     const res = await listDatasources()
     items.value = res.items ?? []
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : '加载数据源列表失败'
+    loadError.value = extractErrorMessage(err, '加载数据源列表失败')
   } finally {
     loading.value = false
   }
@@ -44,6 +45,26 @@ const formOpen = ref(false)
 const editingCode = ref<string | null>(null)
 const formSubmitting = ref(false)
 const formError = ref('')
+const dsFieldErrors = reactive({
+  conn_code: '',
+  conn_name: '',
+  db_host: '',
+  db_name: '',
+  db_user: '',
+  password: '',
+  allowed_tables: '',
+})
+
+function resetFieldErrors() {
+  dsFieldErrors.conn_code = ''
+  dsFieldErrors.conn_name = ''
+  dsFieldErrors.db_host = ''
+  dsFieldErrors.db_name = ''
+  dsFieldErrors.db_user = ''
+  dsFieldErrors.password = ''
+  dsFieldErrors.allowed_tables = ''
+}
+
 const dsForm = reactive({
   conn_code: '',
   conn_name: '',
@@ -59,6 +80,7 @@ const dsForm = reactive({
 function clearSensitiveFormState() {
   dsForm.password = ''
   formError.value = ''
+  resetFieldErrors()
 }
 
 function openCreateDialog() {
@@ -74,6 +96,7 @@ function openCreateDialog() {
   dsForm.allowed_tables_text = ''
   dsForm.status = 'ACTIVE'
   formError.value = ''
+  resetFieldErrors()
   formOpen.value = true
 }
 
@@ -90,32 +113,49 @@ function openEditDialog(item: DatasourceItem) {
   dsForm.allowed_tables_text = item.allowed_tables.join(', ')
   dsForm.status = item.status
   formError.value = ''
+  resetFieldErrors()
   formOpen.value = true
 }
 
 async function handleSubmit() {
   formError.value = ''
-  if (!dsForm.conn_name.trim() || !dsForm.db_name.trim() || !dsForm.db_user.trim()) {
-    formError.value = '请完整填写连接名称、数据库名与只读用户名'
-    return
+  resetFieldErrors()
+  if (!editingCode.value && !dsForm.conn_code.trim()) {
+    dsFieldErrors.conn_code = '请填写连接编码'
+  }
+  if (!dsForm.conn_name.trim()) {
+    dsFieldErrors.conn_name = '请填写连接名称'
+  }
+  if (!dsForm.db_host.trim()) {
+    dsFieldErrors.db_host = '请填写 MySQL 主机'
+  }
+  if (!dsForm.db_name.trim()) {
+    dsFieldErrors.db_name = '请填写数据库名'
+  }
+  if (!dsForm.db_user.trim()) {
+    dsFieldErrors.db_user = '请填写只读用户名'
+  }
+  if (!editingCode.value && !dsForm.password) {
+    dsFieldErrors.password = '新增数据源必须填写只读账户密码'
   }
   const tables = dsForm.allowed_tables_text
     .split(/[\n,]/)
     .map((t) => t.trim())
     .filter(Boolean)
   if (tables.length === 0) {
-    formError.value = '请至少指定一张允许抽样的只读白名单表'
-    return
+    dsFieldErrors.allowed_tables = '请至少指定一张允许抽样的只读白名单表'
   }
-  if (!editingCode.value) {
-    if (!dsForm.conn_code.trim()) {
-      formError.value = '请填写连接编码'
-      return
-    }
-    if (!dsForm.password) {
-      formError.value = '新增数据源必须填写只读账户密码'
-      return
-    }
+  if (
+    dsFieldErrors.conn_code ||
+    dsFieldErrors.conn_name ||
+    dsFieldErrors.db_host ||
+    dsFieldErrors.db_name ||
+    dsFieldErrors.db_user ||
+    dsFieldErrors.password ||
+    dsFieldErrors.allowed_tables
+  ) {
+    formError.value = '请修正标注字段的填写错误后再保存'
+    return
   }
 
   formSubmitting.value = true
@@ -151,7 +191,7 @@ async function handleSubmit() {
     formOpen.value = false
     await loadData()
   } catch (err) {
-    formError.value = err instanceof Error ? err.message : '保存数据源失败'
+    formError.value = extractErrorMessage(err, '保存数据源失败')
   } finally {
     dsForm.password = ''
     formSubmitting.value = false
@@ -170,7 +210,7 @@ async function handleTestConnection(item: DatasourceItem) {
     }
     await loadData()
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '连通性测试失败')
+    ElMessage.error(extractErrorMessage(err, '连通性测试失败'))
   } finally {
     testingCode.value = ''
   }
@@ -371,19 +411,28 @@ onMounted(() => {
                 v-model="dsForm.conn_code"
                 :disabled="Boolean(editingCode)"
                 placeholder="例如 mysql_gov_ro"
+                @input="dsFieldErrors.conn_code = ''"
               />
+              <span v-if="dsFieldErrors.conn_code" class="ds-field-error">{{ dsFieldErrors.conn_code }}</span>
             </div>
 
             <div class="form-field">
               <label class="form-label" for="ds-conn-name">连接名称</label>
-              <el-input id="ds-conn-name" v-model="dsForm.conn_name" placeholder="政务问答只读从库" />
+              <el-input
+                id="ds-conn-name"
+                v-model="dsForm.conn_name"
+                placeholder="政务问答只读从库"
+                @input="dsFieldErrors.conn_name = ''"
+              />
+              <span v-if="dsFieldErrors.conn_name" class="ds-field-error">{{ dsFieldErrors.conn_name }}</span>
             </div>
           </div>
 
           <div class="form-grid-2col">
             <div class="form-field">
               <label class="form-label" for="ds-host">MySQL 主机</label>
-              <el-input id="ds-host" v-model="dsForm.db_host" />
+              <el-input id="ds-host" v-model="dsForm.db_host" @input="dsFieldErrors.db_host = ''" />
+              <span v-if="dsFieldErrors.db_host" class="ds-field-error">{{ dsFieldErrors.db_host }}</span>
             </div>
 
             <div class="form-field">
@@ -402,12 +451,14 @@ onMounted(() => {
           <div class="form-grid-2col">
             <div class="form-field">
               <label class="form-label" for="ds-dbname">数据库名</label>
-              <el-input id="ds-dbname" v-model="dsForm.db_name" />
+              <el-input id="ds-dbname" v-model="dsForm.db_name" @input="dsFieldErrors.db_name = ''" />
+              <span v-if="dsFieldErrors.db_name" class="ds-field-error">{{ dsFieldErrors.db_name }}</span>
             </div>
 
             <div class="form-field">
               <label class="form-label" for="ds-user">只读用户名</label>
-              <el-input id="ds-user" v-model="dsForm.db_user" />
+              <el-input id="ds-user" v-model="dsForm.db_user" @input="dsFieldErrors.db_user = ''" />
+              <span v-if="dsFieldErrors.db_user" class="ds-field-error">{{ dsFieldErrors.db_user }}</span>
             </div>
           </div>
 
@@ -421,7 +472,9 @@ onMounted(() => {
               type="password"
               show-password
               autocomplete="new-password"
+              @input="dsFieldErrors.password = ''"
             />
+            <span v-if="dsFieldErrors.password" class="ds-field-error">{{ dsFieldErrors.password }}</span>
           </div>
 
           <div class="form-field">
@@ -432,7 +485,9 @@ onMounted(() => {
               type="textarea"
               :rows="2"
               placeholder="qa_records, service_tickets"
+              @input="dsFieldErrors.allowed_tables = ''"
             />
+            <span v-if="dsFieldErrors.allowed_tables" class="ds-field-error">{{ dsFieldErrors.allowed_tables }}</span>
           </div>
 
           <div class="form-field">
@@ -474,27 +529,6 @@ onMounted(() => {
 
 .table-scroll-wrap {
   overflow-x: auto;
-}
-
-.ds-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.ds-data-table th,
-.ds-data-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--ds-border-subtle);
-  text-align: left;
-  vertical-align: middle;
-}
-
-.ds-data-table th {
-  background: var(--ds-bg-panel);
-  color: var(--ds-text-secondary);
-  font-weight: 600;
-  font-size: 0.8125rem;
 }
 
 .row-actions {

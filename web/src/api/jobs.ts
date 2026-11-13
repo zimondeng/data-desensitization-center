@@ -30,8 +30,20 @@ export async function getJobDetail(jobNo: string): Promise<BatchJobItem> {
   return unwrapEnvelope(resp)
 }
 
-export async function createFileJob(formData: FormData): Promise<BatchJobItem> {
-  const resp = await http.post<ApiEnvelope<BatchJobItem>>('/api/v1/jobs/file', formData)
+export async function createFileJob(
+  formData: FormData,
+  onUploadProgress?: (percentage: number) => void,
+): Promise<BatchJobItem> {
+  const resp = await http.post<ApiEnvelope<BatchJobItem>>('/api/v1/jobs/file', formData, {
+    onUploadProgress: onUploadProgress
+      ? (evt) => {
+          if (evt.total && evt.total > 0) {
+            const pct = Math.min(100, Math.round((evt.loaded * 100) / evt.total))
+            onUploadProgress(pct)
+          }
+        }
+      : undefined,
+  })
   return unwrapEnvelope(resp)
 }
 

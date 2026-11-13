@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Literal
 
 from app.detectors.types import DetectorSource
@@ -113,5 +114,10 @@ class EphemeralScopeDict:
     def __enter__(self) -> EphemeralScopeDict:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.clear()

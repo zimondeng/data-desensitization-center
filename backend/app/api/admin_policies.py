@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
 import re
 from typing import Any
 
@@ -11,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
-from app.common.envelope import ok_response
+from app.common.envelope import format_optional_utc_ms, ok_response
 from app.common.errors import BadRequestError, NotFoundError
 from app.db.base import new_uuid, utcnow
 from app.db.models import AdminUser, PolicyProfile
@@ -28,14 +27,6 @@ router = APIRouter(prefix="/api/admin/policies", tags=["admin-policies"])
 
 POLICY_STATUSES: frozenset[str] = frozenset({"DRAFT", "ACTIVE", "ARCHIVED"})
 _POLICY_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-
-
-def _fmt_dt(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.isoformat(timespec="milliseconds") + "Z"
 
 
 def _serialize_policy(row: PolicyProfile) -> dict[str, Any]:
@@ -63,8 +54,8 @@ def _serialize_policy(row: PolicyProfile) -> dict[str, Any]:
         "status": row.status,
         "description": row.description,
         "created_by": row.created_by,
-        "create_time": _fmt_dt(row.create_time),
-        "update_time": _fmt_dt(row.update_time),
+        "create_time": format_optional_utc_ms(row.create_time),
+        "update_time": format_optional_utc_ms(row.update_time),
     }
 
 

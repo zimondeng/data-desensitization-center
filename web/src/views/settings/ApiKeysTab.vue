@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StatusTag from '@/components/StatusTag.vue'
+import { extractErrorMessage } from '@/api/client'
 import { createApiKey, listApiKeys, revokeApiKey } from '@/api/apiKeys'
 import { listPolicies } from '@/api/policies'
 import { useAuthStore } from '@/stores/auth'
@@ -35,7 +36,7 @@ async function loadData() {
     items.value = keyRes.items ?? []
     policies.value = polRes.policies ?? []
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : '加载 API Key 列表失败'
+    loadError.value = extractErrorMessage(err, '加载 API Key 列表失败')
   } finally {
     loading.value = false
   }
@@ -45,6 +46,11 @@ async function loadData() {
 const createOpen = ref(false)
 const createSubmitting = ref(false)
 const createError = ref('')
+const createFieldErrors = reactive({
+  key_name: '',
+  rate_limit_rpm: '',
+  allowed_ips: '',
+})
 const createForm = reactive({
   key_name: '',
   default_policy_code: 'gov_eval_corpus',
@@ -66,9 +72,16 @@ function clearOnceSecretState() {
   onceDialogOpen.value = false
 }
 
+function clearCreateErrors() {
+  createError.value = ''
+  createFieldErrors.key_name = ''
+  createFieldErrors.rate_limit_rpm = ''
+  createFieldErrors.allowed_ips = ''
+}
+
 function openCreateDialog() {
   if (!canManage.value) return
-  createError.value = ''
+  clearCreateErrors()
   createForm.key_name = ''
   createForm.default_policy_code = policies.value[0]?.policy_code ?? 'gov_eval_corpus'
   createForm.rate_limit_rpm = 120
@@ -78,9 +91,15 @@ function openCreateDialog() {
 }
 
 async function handleCreateSubmit() {
-  createError.value = ''
+  clearCreateErrors()
   if (!createForm.key_name.trim()) {
-    createError.value = '请填写密钥名称'
+    createFieldErrors.key_name = '请填写密钥名称'
+  }
+  if (!Number.isInteger(createForm.rate_limit_rpm) || createForm.rate_limit_rpm < 1 || createForm.rate_limit_rpm > 100000) {
+    createFieldErrors.rate_limit_rpm = '限流阈值须为 1 ~ 100000 的整数'
+  }
+  if (createFieldErrors.key_name || createFieldErrors.rate_limit_rpm) {
+    createError.value = '请修正表单字段错误后再提交'
     return
   }
 
@@ -105,7 +124,11 @@ async function handleCreateSubmit() {
     onceDialogOpen.value = true
     await loadData()
   } catch (err) {
-    createError.value = err instanceof Error ? err.message : '创建 API Key 失败'
+    const msg = extractErrorMessage(err, '创建 API Key 失败')
+    createError.value = msg
+    if (msg.toLowerCase().includes('ip') || msg.toLowerCase().includes('cidr')) {
+      createFieldErrors.allowed_ips = msg
+    }
   } finally {
     createSubmitting.value = false
   }
@@ -126,7 +149,7 @@ async function handleRevoke(item: ApiKeyItem) {
   if (!canManage.value || item.status !== 'ACTIVE') return
   try {
     await ElMessageBox.confirm(
-      `确认吊销 API Key「${item.key_name}」(${item.key_prefix}***)？吊销后所有使用该密钥的 /api/v1/* 调用将立即返回 401。`,
+      `确认吊销 API Key「${item.key_name}」(${item.key_prefix}***)？吊销后所有使用该密钥的 /api/v1/* 调用将立即返回 403。`,
       '高风险操作确认',
       {
         confirmButtonText: '确认吊销',
@@ -157,7 +180,7 @@ onMounted(() => {
       <div>
         <h3 class="ds-section-title">外部系统 API Key 管理</h3>
         <p class="ds-muted-text" style="margin: 2px 0 0">
-          列表与数据库仅保留 HMAC-SHA256 摘要及脱敏前缀 <span class="ds-mono">dsk_*</span>；完整密钥仅创建时一次性显示。
+          列表与数据库仅保留 SHA-256 摘要及脱敏前缀 <span class="ds-mono">dsk_*</span>；完整密钥仅创建时一次性显示。
         </p>
       </div>
       <el-tooltip :disabled="canManage" :content="readonlyReason" placement="bottom">
@@ -228,7 +251,7 @@ onMounted(() => {
                   :tag-type="statusMeta(item.status).tagType"
                 />
               </td>
-              <td class="ds-mono ds-muted-text">
+              <td class="ds-mono ds-muted-text ds-tabular-nums">
                 {{ item.last_used_at ? item.last_used_at.replace('T', ' ').slice(0, 16) : '--' }}
               </td>
               <td>
@@ -275,7 +298,9 @@ onMounted(() => {
               v-model="createForm.key_name"
               name="key_name"
               placeholder="例如 政务语料清洗网关"
+              @input="createFieldErrors.key_name = ''"
             />
+            <span v-if="createFieldErrors.key_name" class="ds-field-error">{{ createFieldErrors.key_name }}</span>
           </div>
 
           <div class="form-field">
@@ -301,10 +326,12 @@ onMounted(() => {
                 id="api-key-rpm"
                 v-model="createForm.rate_limit_rpm"
                 :min="1"
-                :max="10000"
+                :max="100000"
                 class="ds-tabular-nums"
                 style="width: 100%"
+                @change="createFieldErrors.rate_limit_rpm = ''"
               />
+              <span v-if="createFieldErrors.rate_limit_rpm" class="ds-field-error">{{ createFieldErrors.rate_limit_rpm }}</span>
             </div>
 
             <div class="form-field">
@@ -324,7 +351,9 @@ onMounted(() => {
               type="textarea"
               :rows="2"
               placeholder="127.0.0.1, 10.0.0.0/24"
+              @input="createFieldErrors.allowed_ips = ''"
             />
+            <span v-if="createFieldErrors.allowed_ips" class="ds-field-error">{{ createFieldErrors.allowed_ips }}</span>
           </div>
         </div>
       </template>
@@ -359,7 +388,7 @@ onMounted(() => {
             type="warning"
             :closable="false"
             show-icon
-            title="密钥仅在创建时明文展示一次，系统仅存储 HMAC-SHA256 哈希。关闭本窗口后将无法再次查看！"
+            title="密钥仅在创建时明文展示一次，系统仅存储 SHA-256 哈希。关闭本窗口后将无法再次查看！"
           />
 
           <div class="ds-muted-text">密钥名称：{{ onceKeyName }}</div>
@@ -405,27 +434,6 @@ onMounted(() => {
 
 .table-scroll-wrap {
   overflow-x: auto;
-}
-
-.ds-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.ds-data-table th,
-.ds-data-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--ds-border-subtle);
-  text-align: left;
-  vertical-align: middle;
-}
-
-.ds-data-table th {
-  background: var(--ds-bg-panel);
-  color: var(--ds-text-secondary);
-  font-weight: 600;
-  font-size: 0.8125rem;
 }
 
 .dialog-form-stack,

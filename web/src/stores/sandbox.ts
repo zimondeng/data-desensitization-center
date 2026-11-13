@@ -14,6 +14,7 @@ export const useSandboxStore = defineStore('sandbox', () => {
   const policyCode = ref<string>('gov_eval_corpus')
   const policyVersion = ref<number>(0)
   const inputText = ref<string>('')
+  const analyzedText = ref<string>('')
   const structuredJsonText = ref<string>('')
   const result = shallowRef<SandboxPreviewResponseData | null>(null)
   const running = ref<boolean>(false)
@@ -30,6 +31,7 @@ export const useSandboxStore = defineStore('sandbox', () => {
 
   function clearInputs(): void {
     inputText.value = ''
+    analyzedText.value = ''
     structuredJsonText.value = ''
     result.value = null
     errorMessage.value = ''
@@ -37,6 +39,7 @@ export const useSandboxStore = defineStore('sandbox', () => {
 
   function clearSensitiveState(): void {
     inputText.value = ''
+    analyzedText.value = ''
     structuredJsonText.value = ''
     result.value = null
     errorMessage.value = ''
@@ -57,7 +60,9 @@ export const useSandboxStore = defineStore('sandbox', () => {
       } else {
         req.payload = parsedPayload
       }
-      result.value = await previewSandboxMask(req)
+      const res = await previewSandboxMask(req)
+      result.value = res
+      analyzedText.value = mode.value === 'TEXT' ? (req.text ?? '') : ''
     } finally {
       running.value = false
     }
@@ -68,6 +73,7 @@ export const useSandboxStore = defineStore('sandbox', () => {
     policyCode,
     policyVersion,
     inputText,
+    analyzedText,
     structuredJsonText,
     result,
     running,

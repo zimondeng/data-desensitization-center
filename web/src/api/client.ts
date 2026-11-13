@@ -69,6 +69,19 @@ export class ApiRequestError extends Error {
   }
 }
 
+export function extractErrorMessage(
+  err: unknown,
+  fallback = '请求处理失败',
+): string {
+  if (err instanceof ApiRequestError) {
+    return err.userMessage
+  }
+  if (err instanceof Error && err.message) {
+    return sanitizeErrorMessage(err.message)
+  }
+  return fallback
+}
+
 export const http = axios.create({
   baseURL: '',
   timeout: 30000,

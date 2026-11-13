@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
-from app.common.envelope import ok_response
+from app.common.envelope import format_utc_ms, normalize_utc_naive, ok_response
 from app.db.base import utcnow
 from app.db.models import AdminUser, ApiUsageHourly, BatchJob
 from app.db.session import get_session
@@ -17,16 +17,13 @@ from app.telemetry import CANONICAL_ENTITY_METADATA, truncate_to_hour
 router = APIRouter(prefix="/api/admin/metrics", tags=["admin-metrics"])
 
 
-def _fmt_utc_ms(dt: datetime) -> str:
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.isoformat(timespec="milliseconds") + "Z"
-
-
 def _fmt_hour_bucket(dt: datetime) -> str:
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.replace(minute=0, second=0, microsecond=0).isoformat(timespec="seconds") + "Z"
+    return (
+        normalize_utc_naive(dt)
+        .replace(minute=0, second=0, microsecond=0)
+        .isoformat(timespec="seconds")
+        + "Z"
+    )
 
 
 @router.get("/hourly")
@@ -173,7 +170,7 @@ def get_hourly_metrics(
             "hours": hours,
             "include_sandbox": include_sandbox,
             "window_start": _fmt_hour_bucket(window_start),
-            "updated_at": _fmt_utc_ms(now),
+            "updated_at": format_utc_ms(now),
             "total_requests": total_requests,
             "total_items": total_items,
             "total_chars": total_chars,

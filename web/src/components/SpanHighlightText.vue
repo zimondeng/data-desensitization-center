@@ -2,26 +2,14 @@
   <div class="span-highlight-root">
     <template v-for="(seg, idx) in segments" :key="idx">
       <span v-if="!seg.span" class="span-plain-text">{{ seg.text }}</span>
-      <span
-        v-else
-        :class="chipClass(seg.span)"
-        :title="chipTooltip(seg.span)"
-      >
-        <span class="span-orig-text">{{ seg.text }}</span>
-        <span v-if="seg.span.exempted" class="ds-span-chip__meta">
-          豁免保留 · {{ seg.span.allowlist_group || 'allowlist' }}
-        </span>
-        <span v-else class="ds-span-chip__meta">
-          {{ seg.span.replacement }} · {{ seg.span.detector }} {{ seg.span.score.toFixed(2) }}
-        </span>
-      </span>
+      <SpanChip v-else :span="seg.span" :display-text="seg.text" />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ENTITY_LABEL_ZH_MAP } from '@/constants/domain'
+import SpanChip from '@/components/SpanChip.vue'
 import type { SandboxSpan } from '@/types/api'
 
 const props = defineProps<{
@@ -62,19 +50,6 @@ const segments = computed<TextSegment[]>(() => {
   }
   return out
 })
-
-function chipClass(span: SandboxSpan): string[] {
-  const state = span.exempted ? 'allowlist' : span.state || span.detector
-  return ['ds-span-chip', `ds-span-chip--${state}`]
-}
-
-function chipTooltip(span: SandboxSpan): string {
-  const zh = ENTITY_LABEL_ZH_MAP[span.label] ?? span.label
-  if (span.exempted) {
-    return `${zh} (${span.label}) · 白名单豁免：${span.allowlist_group ?? ''} / ${span.allowlist_rule ?? ''}`
-  }
-  return `${zh} (${span.label}) · 检测器：${span.detector} · 置信度：${span.score.toFixed(2)} · 替换：${span.replacement ?? ''}`
-}
 </script>
 
 <style scoped>
@@ -83,9 +58,5 @@ function chipTooltip(span: SandboxSpan): string {
   word-break: break-word;
   line-height: 1.85;
   color: var(--ds-text-primary);
-}
-
-.span-orig-text {
-  font-weight: 500;
 }
 </style>

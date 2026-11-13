@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StatusTag from '@/components/StatusTag.vue'
 import JobCreateModals from '@/views/jobs/JobCreateModals.vue'
-import SpotCheckDrawer from '@/views/jobs/SpotCheckDrawer.vue'
+import { extractErrorMessage } from '@/api/client'
 import { listDatasources } from '@/api/datasources'
 import { cancelJob, downloadJobArtifact, listJobs } from '@/api/jobs'
 import { listPolicies } from '@/api/policies'
 import { useAuthStore } from '@/stores/auth'
 import { JOB_STATUS_META, SPOT_CHECK_STATUS_META } from '@/constants/domain'
 import type { BatchJobItem, DatasourceItem, PolicyGroupItem } from '@/types/api'
+
+const SpotCheckDrawer = defineAsyncComponent(() => import('@/views/jobs/SpotCheckDrawer.vue'))
 
 const POLL_INTERVAL_MS = 4000
 
@@ -107,7 +109,7 @@ async function loadJobs(silent = false) {
     total.value = res.total ?? 0
   } catch (err) {
     if (!silent) {
-      loadError.value = err instanceof Error ? err.message : '加载批处理任务列表失败'
+      loadError.value = extractErrorMessage(err, '加载批处理任务列表失败')
     }
   } finally {
     if (!silent) {
@@ -115,6 +117,20 @@ async function loadJobs(silent = false) {
     }
     scheduleNextPoll()
   }
+}
+
+function handleSearch() {
+  filters.page = 1
+  void loadJobs()
+}
+
+function resetFilters() {
+  filters.keyword = ''
+  filters.status = ''
+  filters.source_type = ''
+  filters.spot_check_status = ''
+  filters.page = 1
+  void loadJobs()
 }
 
 async function loadReferenceOptions() {
@@ -137,7 +153,7 @@ async function handleDownload(job: BatchJobItem) {
     await downloadJobArtifact(job.job_no, job.output_format)
     ElMessage.success(`已开始下载 ${job.job_no} 脱敏产物`)
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '下载脱敏产物失败')
+    ElMessage.error(extractErrorMessage(err, '下载脱敏产物失败'))
     await loadJobs(true)
   } finally {
     downloadingJobNo.value = ''
@@ -244,7 +260,7 @@ onBeforeUnmount(() => {
           placeholder="搜索任务编号或任务名称"
           clearable
           style="width: 220px"
-          @keyup.enter="loadJobs()"
+          @keyup.enter="handleSearch()"
         />
         <el-select v-model="filters.status" clearable placeholder="任务状态" style="width: 156px">
           <el-option
@@ -271,7 +287,8 @@ onBeforeUnmount(() => {
             :value="key"
           />
         </el-select>
-        <el-button @click="loadJobs()">查询刷新</el-button>
+        <el-button data-testid="jobs-search-btn" @click="handleSearch()">查询刷新</el-button>
+        <el-button data-testid="jobs-reset-btn" @click="resetFilters()">重置</el-button>
         <span v-if="hasRunningJobs" class="ds-muted-text" style="margin-left: auto">
           检测到进行中任务，每 4 秒自动刷新（切至后台标签页自动暂停）
         </span>
@@ -375,13 +392,25 @@ onBeforeUnmount(() => {
           </tbody>
         </table>
       </div>
+
+      <div v-if="total > 0" class="jobs-pagination">
+        <el-pagination
+          v-model:current-page="filters.page"
+          v-model:page-size="filters.page_size"
+          :total="total"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          @current-change="loadJobs()"
+          @size-change="handleSearch()"
+        />
+      </div>
     </section>
 
     <JobCreateModals
       v-model:mode="createModalMode"
       :policies="policies"
       :datasources="datasources"
-      @created="loadJobs()"
+      @created="handleSearch()"
     />
 
     <SpotCheckDrawer
@@ -411,25 +440,10 @@ onBeforeUnmount(() => {
   overflow-x: auto;
 }
 
-.ds-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.ds-data-table th,
-.ds-data-table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--ds-border-subtle);
-  text-align: left;
-  vertical-align: middle;
-}
-
-.ds-data-table th {
-  background: var(--ds-bg-panel);
-  color: var(--ds-text-secondary);
-  font-weight: 600;
-  font-size: 0.8125rem;
+.jobs-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 
 .job-no-cell {
