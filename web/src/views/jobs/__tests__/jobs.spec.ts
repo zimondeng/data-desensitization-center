@@ -5,6 +5,7 @@ import { ElMessageBox } from 'element-plus'
 import { http } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import JobsView from '@/views/jobs/JobsView.vue'
+import SpotCheckDrawer from '@/views/jobs/SpotCheckDrawer.vue'
 
 function makeJobsResponse(overrides?: Array<Record<string, unknown>>) {
   return {
@@ -223,20 +224,24 @@ describe('Slice 5: JobsView download guards, spot-check confirmation, polling & 
     document.dispatchEvent(new Event('visibilitychange'))
 
     // Open spot-check drawer for AUDITOR and verify FLAGGED_LEAK confirmation
+    // Restore real timers so defineAsyncComponent dynamic import settles cleanly without fake-timer race
+    vi.useRealTimers()
     await wrapper.find('[data-testid="spot-check-job-JOB-20261113-001"]').trigger('click')
-    await vi.advanceTimersByTimeAsync(50)
-    expect(wrapper.text()).toContain('严禁将原始敏感明文写入备注')
-    expect(wrapper.text()).toContain('<PERSON_1>')
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('严禁将原始敏感明文写入备注')
+      expect(wrapper.text()).toContain('<PERSON_1>')
+    }, { timeout: 3000 })
 
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
     await wrapper.find('[data-testid="spot-check-radio-FLAGGED_LEAK"]').trigger('click')
     await wrapper.find('[data-testid="submit-spot-check-btn"]').trigger('click')
-    await vi.advanceTimersByTimeAsync(50)
-    expect(confirmSpy).toHaveBeenCalled()
-    expect(postSpy).toHaveBeenCalledWith(
-      '/api/admin/jobs/JOB-20261113-001/spot-check',
-      expect.objectContaining({ spot_check_status: 'FLAGGED_LEAK' }),
-    )
+    await vi.waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalled()
+      expect(postSpy).toHaveBeenCalledWith(
+        '/api/admin/jobs/JOB-20261113-001/spot-check',
+        expect.objectContaining({ spot_check_status: 'FLAGGED_LEAK' }),
+      )
+    }, { timeout: 3000 })
     confirmSpy.mockRestore()
 
     wrapper.unmount()
@@ -435,5 +440,58 @@ describe('Slice 5: JobsView download guards, spot-check confirmation, polling & 
     wrapper.unmount()
     getSpy.mockRestore()
     postSpy.mockRestore()
+  })
+
+  it('loads preview immediately when SpotCheckDrawer mounts with modelValue=true (async chunk arrival after open)', async () => {
+    vi.useRealTimers()
+    const auth = useAuthStore()
+    auth.setSession('jwt-aud', {
+      uuid: 'u-aud',
+      username: 'aud1',
+      display_name: '合规审核员',
+      role: 'AUDITOR',
+    })
+
+    const getSpy = vi.spyOn(http, 'get').mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'ok',
+        request_id: 'r-imm',
+        data: {
+          job_no: 'JOB-20261113-001',
+          policy_code: 'gov_eval_corpus',
+          policy_version: 1,
+          spot_check_status: 'UNCHECKED',
+          spot_check_note: null,
+          output_sha256: 'abc123def456',
+          expires_at: '2026-11-16T00:00:00Z',
+          output_format: 'JSONL',
+          limit: 20,
+          returned_count: 1,
+          has_more: false,
+          lines: ['{"case_code":"CASE_01","text":"我是<PERSON_1>"}'],
+          records: [{ case_code: 'CASE_01', text: '我是<PERSON_1>' }],
+        },
+      },
+    } as never)
+
+    const job = makeJobsResponse().items[0] as never
+    const drawerWrapper = mount(SpotCheckDrawer, {
+      props: {
+        modelValue: true,
+        job,
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(getSpy).toHaveBeenCalledWith(
+        '/api/admin/jobs/JOB-20261113-001/preview-masked',
+        expect.objectContaining({ params: { limit: 20 } }),
+      )
+      expect(drawerWrapper.text()).toContain('<PERSON_1>')
+    }, { timeout: 1000 })
+
+    drawerWrapper.unmount()
+    getSpy.mockRestore()
   })
 })

@@ -78,6 +78,7 @@ watch(
       clearSensitivePreviewState()
     }
   },
+  { immediate: true },
 )
 
 async function handleSubmit() {
