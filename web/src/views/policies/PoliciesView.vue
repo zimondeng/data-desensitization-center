@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StatusTag from '@/components/StatusTag.vue'
+import { extractErrorMessage } from '@/api/client'
 import { listAllowlists } from '@/api/allowlists'
 import {
   createOrBumpPolicyVersion,
@@ -47,6 +48,18 @@ const policyGroups = ref<PolicyGroupItem[]>([])
 const allowlistGroups = ref<AllowlistGroupSummary[]>([])
 const selectedPolicyCode = ref('')
 const selectedVersionNumber = ref<number | null>(null)
+const fieldErrors = reactive({
+  policy_name: '',
+  entity_rules: {} as Record<string, string>,
+  field_rules: {} as Record<number, string>,
+})
+
+function clearEditorErrors() {
+  submitError.value = ''
+  fieldErrors.policy_name = ''
+  fieldErrors.entity_rules = {}
+  fieldErrors.field_rules = {}
+}
 
 interface PolicyFormState {
   policy_code: string
@@ -175,7 +188,7 @@ function applyVersionToForm(item: PolicyVersionItem) {
     jsonpath: rule.jsonpath,
     role: rule.role,
   }))
-  submitError.value = ''
+  clearEditorErrors()
   savedSnapshot.value = serializeFormSnapshot()
 }
 
@@ -239,7 +252,7 @@ async function loadData(preferCode?: string, preferVersion?: number) {
       }
     }
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : '加载策略列表失败'
+    loadError.value = extractErrorMessage(err, '加载策略列表失败')
   } finally {
     loading.value = false
   }
@@ -254,6 +267,7 @@ function addFieldRoleRule() {
 
 function removeFieldRoleRule(index: number) {
   form.field_rules.splice(index, 1)
+  fieldErrors.field_rules = {}
 }
 
 function resetDraft() {
@@ -290,15 +304,44 @@ function buildPayloadEntityRules(): Record<string, EntityRuleConfig> {
 
 async function handlePublishNewVersion() {
   if (!canEdit.value) return
-  submitError.value = ''
+  clearEditorErrors()
 
+  let hasValidationError = false
   if (!form.policy_name.trim()) {
+    fieldErrors.policy_name = '请填写策略名称'
     submitError.value = '请填写策略名称。'
-    return
+    hasValidationError = true
   }
-  const invalidPath = form.field_rules.find((item) => !item.jsonpath.trim().startsWith('$'))
-  if (invalidPath) {
-    submitError.value = `JSONPath 规则必须以 $ 开头：${invalidPath.jsonpath || '(空)'}`
+
+  for (const meta of ENTITY_LABEL_META) {
+    const rule = form.entity_rules[meta.label]
+    if (!rule || !rule.enabled) continue
+    if (!Number.isFinite(rule.min_score) || rule.min_score < 0 || rule.min_score > 1) {
+      fieldErrors.entity_rules[meta.label] = '置信度阈值需在 0 至 1 之间'
+      hasValidationError = true
+    } else if (rule.action === 'HASH') {
+      const h = Number(rule.hash_len ?? 12)
+      if (!Number.isInteger(h) || h < 6 || h > 64) {
+        fieldErrors.entity_rules[meta.label] = 'HASH 截断长度必须为 6 至 64 的整数'
+        hasValidationError = true
+      }
+    }
+  }
+  if (Object.keys(fieldErrors.entity_rules).length > 0 && !submitError.value) {
+    submitError.value = '存在不合法的实体规则参数，请检查对应实体行的错误提示。'
+  }
+
+  form.field_rules.forEach((item, idx) => {
+    if (!item.jsonpath.trim().startsWith('$')) {
+      fieldErrors.field_rules[idx] = 'JSONPath 规则必须以 $ 开头'
+      if (!submitError.value) {
+        submitError.value = `JSONPath 规则必须以 $ 开头：${item.jsonpath || '(空)'}`
+      }
+      hasValidationError = true
+    }
+  })
+
+  if (hasValidationError) {
     return
   }
 
@@ -326,7 +369,7 @@ async function handlePublishNewVersion() {
     ElMessage.success(`已发布不可变新版本 ${created.policy_code} v${created.version}`)
     await loadData(created.policy_code, created.version)
   } catch (err) {
-    submitError.value = err instanceof Error ? err.message : '发布策略版本失败'
+    submitError.value = extractErrorMessage(err, '发布策略版本失败')
   } finally {
     saving.value = false
   }
@@ -344,7 +387,7 @@ async function handleSetDefaultVersion() {
     ElMessage.success(`已将 ${updated.policy_code} v${updated.version} 设为默认策略版本`)
     await loadData(updated.policy_code, updated.version)
   } catch (err) {
-    submitError.value = err instanceof Error ? err.message : '设置默认版本失败'
+    submitError.value = extractErrorMessage(err, '设置默认版本失败')
   } finally {
     settingDefault.value = false
   }
@@ -413,7 +456,7 @@ async function handleCreateNewPolicyCode() {
         rules: [],
       },
       allowlist_groups: [],
-      set_as_default: false,
+      set_as_default: true,
       status: 'ACTIVE',
       description: createForm.description.trim() || null,
     })
@@ -421,7 +464,7 @@ async function handleCreateNewPolicyCode() {
     ElMessage.success(`已创建策略 ${created.policy_code} v1`)
     await loadData(created.policy_code, created.version)
   } catch (err) {
-    createFormErrors.general = err instanceof Error ? err.message : '创建策略失败'
+    createFormErrors.general = extractErrorMessage(err, '创建策略失败')
   } finally {
     createSubmitting.value = false
   }
@@ -608,7 +651,15 @@ onMounted(() => {
                   name="policy_name"
                   :disabled="!canEdit"
                   placeholder="请输入策略名称"
+                  @input="fieldErrors.policy_name = ''"
                 />
+                <div
+                  v-if="fieldErrors.policy_name"
+                  data-testid="policy-name-error"
+                  class="ds-field-error"
+                >
+                  {{ fieldErrors.policy_name }}
+                </div>
               </div>
 
               <div class="form-field">
@@ -733,6 +784,13 @@ onMounted(() => {
                           </span>
                         </div>
                         <div class="ds-mono ds-muted-text">{{ row.label }}</div>
+                        <div
+                          v-if="fieldErrors.entity_rules[row.label]"
+                          :data-testid="`entity-error-${row.label}`"
+                          class="ds-field-error"
+                        >
+                          {{ fieldErrors.entity_rules[row.label] }}
+                        </div>
                       </div>
                     </td>
                     <td style="text-align: center">
@@ -741,6 +799,7 @@ onMounted(() => {
                         v-model="form.entity_rules[row.label].enabled"
                         :disabled="!canEdit"
                         :aria-label="`启用 ${row.labelZh}`"
+                        @change="delete fieldErrors.entity_rules[row.label]"
                       />
                     </td>
                     <td>
@@ -755,6 +814,7 @@ onMounted(() => {
                         :disabled="!canEdit || !form.entity_rules[row.label].enabled"
                         :aria-label="`${row.labelZh} 阈值`"
                         style="width: 88px"
+                        @input="delete fieldErrors.entity_rules[row.label]"
                       />
                     </td>
                     <td>
@@ -765,6 +825,7 @@ onMounted(() => {
                         :disabled="!canEdit || !form.entity_rules[row.label].enabled"
                         :aria-label="`${row.labelZh} 掩码动作`"
                         style="width: 184px"
+                        @change="delete fieldErrors.entity_rules[row.label]"
                       >
                         <option
                           v-for="opt in MASK_ACTION_OPTIONS"
@@ -826,12 +887,14 @@ onMounted(() => {
                           <span class="ds-muted-text">截断长度</span>
                           <input
                             v-model.number="form.entity_rules[row.label].hash_len"
+                            :data-testid="`hash-len-input-${row.label}`"
                             type="number"
-                            min="4"
+                            min="6"
                             max="64"
                             class="ds-native-input ds-tabular-nums"
                             :disabled="!canEdit || !form.entity_rules[row.label].enabled"
                             style="width: 72px"
+                            @input="delete fieldErrors.entity_rules[row.label]"
                           />
                         </template>
                       </div>
@@ -894,30 +957,36 @@ onMounted(() => {
             </div>
 
             <div v-else class="field-rules-list">
-              <div v-for="(rule, idx) in form.field_rules" :key="idx" class="field-rule-row">
-                <el-input
-                  v-model="rule.jsonpath"
-                  class="ds-mono"
-                  placeholder="例如 $.turns[?(@.role=='user')].content"
-                  :disabled="!canEdit"
-                />
-                <el-select v-model="rule.role" :disabled="!canEdit" style="width: 280px">
-                  <el-option
-                    v-for="(meta, roleKey) in FIELD_ROLE_META"
-                    :key="roleKey"
-                    :label="`${roleKey} · ${meta.label}`"
-                    :value="roleKey"
+              <div v-for="(rule, idx) in form.field_rules" :key="idx" class="field-rule-item">
+                <div class="field-rule-row">
+                  <el-input
+                    v-model="rule.jsonpath"
+                    class="ds-mono"
+                    placeholder="例如 $.turns[?(@.role=='user')].content"
+                    :disabled="!canEdit"
+                    @input="delete fieldErrors.field_rules[idx]"
                   />
-                </el-select>
-                <el-button
-                  type="danger"
-                  plain
-                  size="small"
-                  :disabled="!canEdit"
-                  @click="removeFieldRoleRule(idx)"
-                >
-                  移除
-                </el-button>
+                  <el-select v-model="rule.role" :disabled="!canEdit" style="width: 280px">
+                    <el-option
+                      v-for="(meta, roleKey) in FIELD_ROLE_META"
+                      :key="roleKey"
+                      :label="`${roleKey} · ${meta.label}`"
+                      :value="roleKey"
+                    />
+                  </el-select>
+                  <el-button
+                    type="danger"
+                    plain
+                    size="small"
+                    :disabled="!canEdit"
+                    @click="removeFieldRoleRule(idx)"
+                  >
+                    移除
+                  </el-button>
+                </div>
+                <div v-if="fieldErrors.field_rules[idx]" class="ds-field-error">
+                  {{ fieldErrors.field_rules[idx] }}
+                </div>
               </div>
             </div>
           </div>
@@ -984,8 +1053,9 @@ onMounted(() => {
             id="new-policy-code"
             v-model="createForm.policy_code"
             placeholder="例如 finance_audit_v1"
+            @input="createFormErrors.policy_code = ''"
           />
-          <div v-if="createFormErrors.policy_code" class="field-error-text">
+          <div v-if="createFormErrors.policy_code" class="ds-field-error">
             {{ createFormErrors.policy_code }}
           </div>
         </div>
@@ -996,8 +1066,9 @@ onMounted(() => {
             id="new-policy-name"
             v-model="createForm.policy_name"
             placeholder="例如 金融合规审计脱敏策略"
+            @input="createFormErrors.policy_name = ''"
           />
-          <div v-if="createFormErrors.policy_name" class="field-error-text">
+          <div v-if="createFormErrors.policy_name" class="ds-field-error">
             {{ createFormErrors.policy_name }}
           </div>
         </div>
@@ -1257,6 +1328,12 @@ onMounted(() => {
   gap: 8px;
 }
 
+.field-rule-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .field-rule-row {
   display: flex;
   gap: 8px;
@@ -1272,7 +1349,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  box-shadow: var(--ds-shadow-popover);
+  box-shadow: var(--ds-shadow-card);
 }
 
 .publish-bar__info {
@@ -1289,11 +1366,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.field-error-text {
-  font-size: 0.75rem;
-  color: var(--ds-color-danger-text);
 }
 
 @media (max-width: 1023px) {

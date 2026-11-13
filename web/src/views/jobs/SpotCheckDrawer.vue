@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StatusTag from '@/components/StatusTag.vue'
+import { extractErrorMessage } from '@/api/client'
 import { previewJobMasked, submitSpotCheck } from '@/api/jobs'
 import { useAuthStore } from '@/stores/auth'
 import { SPOT_CHECK_STATUS_META } from '@/constants/domain'
@@ -26,7 +27,7 @@ const open = computed({
 
 const loading = ref(false)
 const loadError = ref('')
-const previewData = ref<JobPreviewMaskedData | null>(null)
+const previewData = shallowRef<JobPreviewMaskedData | null>(null)
 const submitting = ref(false)
 const submitError = ref('')
 
@@ -62,7 +63,7 @@ async function loadPreview() {
     }
     spotForm.note = props.job.spot_check_note ?? ''
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : '加载脱敏抽检预览失败'
+    loadError.value = extractErrorMessage(err, '加载脱敏抽检预览失败')
   } finally {
     loading.value = false
   }
@@ -110,7 +111,7 @@ async function handleSubmit() {
     emit('update:modelValue', false)
     emit('updated')
   } catch (err) {
-    submitError.value = err instanceof Error ? err.message : '提交抽检结论失败'
+    submitError.value = extractErrorMessage(err, '提交抽检结论失败')
   } finally {
     submitting.value = false
   }

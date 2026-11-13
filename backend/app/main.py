@@ -3,11 +3,11 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import inspect
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -75,11 +75,11 @@ def mount_spa_if_built(app: FastAPI, dist_dir: Path) -> None:
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
         include_in_schema=False,
     )
-    async def unmatched_api_route(api_subpath: str):
+    async def unmatched_api_route(api_subpath: str) -> Response:
         raise NotFoundError("API endpoint not found")
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str):
+    async def serve_spa(full_path: str) -> FileResponse:
         if full_path == "api" or full_path.startswith("api/"):
             raise NotFoundError("API endpoint not found")
         candidate = (dist_dir / full_path).resolve()
@@ -127,7 +127,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app_instance.state.rate_limiter = SlidingWindowRateLimiter()
 
     @app_instance.middleware("http")
-    async def request_id_and_domain_error_middleware(request: Request, call_next):
+    async def request_id_and_domain_error_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         req_id = generate_request_id()
         request.state.request_id = req_id
         try:

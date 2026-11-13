@@ -185,4 +185,93 @@ describe('Slice 3: PoliciesView immutable versioning, dirty guard & RBAC', () =>
     getSpy.mockRestore()
     postSpy.mockRestore()
   })
+
+  it('sets set_as_default=true when creating v1 policy and enforces hash_len >= 6 & policy_name inline errors', async () => {
+    const auth = useAuthStore()
+    auth.setSession('jwt-op', {
+      uuid: 'u-op',
+      username: 'op1',
+      display_name: '操作员',
+      role: 'OPERATOR',
+    })
+
+    const createdItem = {
+      ...makeMockPolicyResponse().items[0],
+      id: 9,
+      uuid: 'pol-new-v1',
+      policy_code: 'finance_v1',
+      version: 1,
+      policy_name: '金融测试策略 v1',
+      is_default: true,
+    }
+
+    const getSpy = vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
+      if (url === '/api/admin/policies') {
+        return { data: { code: 200, message: 'ok', request_id: 'r1', data: makeMockPolicyResponse() } } as never
+      }
+      if (url === '/api/admin/allowlists') {
+        return { data: { code: 200, message: 'ok', request_id: 'r2', data: { items: [], total: 0, groups: [] } } } as never
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    })
+
+    const postSpy = vi.spyOn(http, 'post').mockResolvedValueOnce({
+      data: { code: 200, message: 'ok', request_id: 'r3', data: createdItem },
+    } as never)
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/policies', component: PoliciesView }],
+    })
+    await router.push('/policies')
+    await router.isReady()
+
+    const wrapper = mount(PoliciesView, {
+      global: { plugins: [router] },
+    })
+    await new Promise((r) => setTimeout(r, 30))
+
+    // Open New Policy v1 modal and verify set_as_default: true
+    await wrapper.find('[data-testid="new-policy-code-btn"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 20))
+    await wrapper.find('#new-policy-code').setValue('finance_v1')
+    await wrapper.find('#new-policy-name').setValue('金融测试策略 v1')
+    const createBtn = wrapper.findAll('button').find((b) => b.text().includes('创建 v1'))
+    expect(createBtn).toBeDefined()
+    await createBtn!.trigger('click')
+    await new Promise((r) => setTimeout(r, 30))
+
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/admin/policies',
+      expect.objectContaining({
+        policy_code: 'finance_v1',
+        set_as_default: true,
+      }),
+    )
+
+    // Switch an enabled entity rule to HASH with hash_len=4 -> inline error blocks submit
+    postSpy.mockClear()
+    const actionSelect = wrapper.find('select[aria-label="个人姓名 掩码动作"]')
+    await actionSelect.setValue('HASH')
+    const hashLenInput = wrapper.find('[data-testid="hash-len-input-private_person"]')
+    await hashLenInput.setValue('4')
+    await wrapper.find('[data-testid="publish-new-version-btn"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(wrapper.find('[data-testid="entity-error-private_person"]').text()).toContain('6 至 64')
+    expect(postSpy).not.toHaveBeenCalled()
+
+    // Empty policy_name -> inline error blocks submit
+    await hashLenInput.setValue('8')
+    await wrapper.find('input[name="policy_name"]').setValue('   ')
+    await wrapper.find('[data-testid="publish-new-version-btn"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(wrapper.find('[data-testid="policy-name-error"]').exists()).toBe(true)
+    expect(postSpy).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    getSpy.mockRestore()
+    postSpy.mockRestore()
+  })
 })

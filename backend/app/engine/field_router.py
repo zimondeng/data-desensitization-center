@@ -229,10 +229,16 @@ def _extract_datum_leaf_keys(datum: Any) -> list[tuple[int, str | int]]:
         for field_name in path_obj.fields:
             if field_name in parent and isinstance(parent[field_name], str):
                 keys.append((id(parent), field_name))
-    elif isinstance(parent, list) and hasattr(path_obj, "indices"):
+    elif isinstance(parent, list):
+        if hasattr(path_obj, "indices"):
+            raw_indices: tuple[Any, ...] | list[Any] = path_obj.indices
+        elif hasattr(path_obj, "index"):
+            raw_indices = (path_obj.index,)
+        else:
+            raw_indices = ()
         n = len(parent)
-        for idx in path_obj.indices:
-            if isinstance(idx, int) and -n <= idx < n:
+        for idx in raw_indices:
+            if isinstance(idx, int) and not isinstance(idx, bool) and -n <= idx < n:
                 real_idx = idx if idx >= 0 else n + idx
                 if isinstance(parent[real_idx], str):
                     keys.append((id(parent), real_idx))

@@ -162,9 +162,12 @@
           />
 
           <template v-else-if="outputTab === 'HIGHLIGHT'">
+            <div v-if="isInputStaleAfterRun" class="stale-edit-notice" role="status">
+              输入内容已修改，当前高亮仍对应上次测试文本，请重新点击「执行脱敏测试」刷新高亮结果。
+            </div>
             <SpanHighlightText
               v-if="store.result.mode === 'TEXT'"
-              :text="store.inputText"
+              :text="store.analyzedText"
               :spans="store.result.spans"
             />
             <div v-else class="structured-traces">
@@ -178,19 +181,11 @@
                   未触发实体命中（或按 PASSTHROUGH / 豁免保留）
                 </div>
                 <div v-else class="trace-row__chips">
-                  <span
+                  <SpanChip
                     v-for="(sp, sIdx) in spans"
                     :key="sIdx"
-                    :class="['ds-span-chip', `ds-span-chip--${sp.exempted ? 'allowlist' : sp.state || sp.detector}`]"
-                  >
-                    <span>{{ sp.text }}</span>
-                    <span v-if="sp.exempted" class="ds-span-chip__meta">
-                      豁免保留 · {{ sp.allowlist_group || 'allowlist' }}
-                    </span>
-                    <span v-else class="ds-span-chip__meta">
-                      {{ sp.replacement }} · {{ sp.detector }} {{ sp.score.toFixed(2) }}
-                    </span>
-                  </span>
+                    :span="sp"
+                  />
                 </div>
               </div>
               <div
@@ -245,7 +240,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Lock } from '@element-plus/icons-vue'
 import { listPolicies } from '@/api/policies'
-import { ApiRequestError } from '@/api/client'
+import { extractErrorMessage } from '@/api/client'
+import SpanChip from '@/components/SpanChip.vue'
 import SpanHighlightText from '@/components/SpanHighlightText.vue'
 import { ENTITY_LABEL_ZH_MAP } from '@/constants/domain'
 import { useSandboxStore } from '@/stores/sandbox'
@@ -286,6 +282,13 @@ const hitEntries = computed<[string, number][]>(() => {
   return Object.entries(store.result.hit_counts).filter(([, count]) => count > 0)
 })
 
+const isInputStaleAfterRun = computed(
+  () =>
+    store.mode === 'TEXT' &&
+    store.result?.mode === 'TEXT' &&
+    store.inputText !== store.analyzedText,
+)
+
 function labelZh(code: string): string {
   return ENTITY_LABEL_ZH_MAP[code] ?? code
 }
@@ -293,6 +296,7 @@ function labelZh(code: string): string {
 function handleModeSwitch(): void {
   inputValidationError.value = ''
   store.errorMessage = ''
+  store.analyzedText = ''
   store.result = null
 }
 
@@ -338,11 +342,7 @@ async function handleRunPreview(): Promise<void> {
   try {
     await store.runPreview(parsedPayload)
   } catch (err) {
-    if (err instanceof ApiRequestError) {
-      store.errorMessage = err.userMessage
-    } else {
-      store.errorMessage = '沙盒脱敏预览请求失败，请检查后端服务连接'
-    }
+    store.errorMessage = extractErrorMessage(err, '沙盒脱敏预览请求失败，请检查后端服务连接')
   }
 }
 
@@ -372,9 +372,7 @@ onMounted(async () => {
       store.policyCode = res.policies[0].policy_code
     }
   } catch (err) {
-    if (err instanceof ApiRequestError) {
-      store.errorMessage = err.userMessage
-    }
+    store.errorMessage = extractErrorMessage(err, '加载脱敏策略列表失败')
   } finally {
     loadingPolicies.value = false
   }
@@ -502,6 +500,16 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-md);
+}
+
+.stale-edit-notice {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: var(--ds-radius-sm);
+  border: 1px solid var(--ds-border-warning);
+  background: var(--ds-bg-warning);
+  color: var(--ds-color-warning);
+  font-size: 0.8125rem;
 }
 
 .trace-row {

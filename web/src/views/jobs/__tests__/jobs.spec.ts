@@ -243,4 +243,197 @@ describe('Slice 5: JobsView download guards, spot-check confirmation, polling & 
     getSpy.mockRestore()
     postSpy.mockRestore()
   })
+
+  it('supports filter reset, pagination, verified-only MySQL column role builder, and isomorphic file upload progress', async () => {
+    const auth = useAuthStore()
+    auth.setSession('jwt-op', {
+      uuid: 'u-op',
+      username: 'operator1',
+      display_name: '操作员',
+      role: 'OPERATOR',
+    })
+
+    const getSpy = vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
+      if (url === '/api/admin/jobs') {
+        return {
+          data: {
+            code: 200,
+            message: 'ok',
+            request_id: 'r1',
+            data: { ...makeJobsResponse(), total: 25, page: 1, page_size: 20 },
+          },
+        } as never
+      }
+      if (url === '/api/admin/policies') {
+        return {
+          data: {
+            code: 200,
+            message: 'ok',
+            request_id: 'r2',
+            data: {
+              items: [],
+              total: 0,
+              policies: [
+                {
+                  policy_code: 'gov_eval_corpus',
+                  policy_name: '政务默认策略',
+                  default_version: 1,
+                  latest_version: 2,
+                  versions: [
+                    { version: 1, is_default: true },
+                    { version: 2, is_default: false },
+                  ],
+                },
+              ],
+            },
+          },
+        } as never
+      }
+      if (url === '/api/admin/datasources') {
+        return {
+          data: {
+            code: 200,
+            message: 'ok',
+            request_id: 'r3',
+            data: {
+              items: [
+                {
+                  id: 1,
+                  uuid: 'ds-verified',
+                  conn_code: 'mysql_verified_ro',
+                  conn_name: '已校验只读库',
+                  db_type: 'MYSQL',
+                  db_host: '127.0.0.1',
+                  db_port: 3306,
+                  db_name: 'gov_qa',
+                  db_user: 'ro_user',
+                  has_password: true,
+                  allowed_tables: ['qa_records'],
+                  status: 'ACTIVE',
+                  last_test_ok: true,
+                  last_tested_at: '2026-11-13T00:00:00Z',
+                  created_by: 'admin',
+                  create_time: '2026-11-12T00:00:00Z',
+                  update_time: '2026-11-12T00:00:00Z',
+                },
+                {
+                  id: 2,
+                  uuid: 'ds-unverified',
+                  conn_code: 'mysql_untested_ro',
+                  conn_name: '未通过校验库',
+                  db_type: 'MYSQL',
+                  db_host: '127.0.0.1',
+                  db_port: 3307,
+                  db_name: 'raw_qa',
+                  db_user: 'ro_user2',
+                  has_password: true,
+                  allowed_tables: ['raw_records'],
+                  status: 'ACTIVE',
+                  last_test_ok: false,
+                  last_tested_at: null,
+                  created_by: 'admin',
+                  create_time: '2026-11-12T00:00:00Z',
+                  update_time: '2026-11-12T00:00:00Z',
+                },
+              ],
+              total: 2,
+            },
+          },
+        } as never
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    })
+
+    const postSpy = vi.spyOn(http, 'post').mockResolvedValue({
+      data: { code: 200, message: 'ok', request_id: 'r4', data: makeJobsResponse().items[0] },
+    } as never)
+
+    const wrapper = mount(JobsView)
+    await vi.advanceTimersByTimeAsync(60)
+
+    // Pagination page click triggers listJobs with page=2
+    const page2Btn = wrapper.findAll('.el-pager .number').find((el) => el.text().trim() === '2')
+    expect(page2Btn).toBeDefined()
+    await page2Btn!.trigger('click')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(getSpy).toHaveBeenCalledWith(
+      '/api/admin/jobs',
+      expect.objectContaining({
+        params: expect.objectContaining({ page: 2 }),
+      }),
+    )
+
+    // Filter reset clears filters and returns to page 1
+    await wrapper.find('.jobs-toolbar input').setValue('测试关键字')
+    await wrapper.find('[data-testid="jobs-reset-btn"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(getSpy).toHaveBeenLastCalledWith(
+      '/api/admin/jobs',
+      expect.objectContaining({
+        params: expect.objectContaining({ page: 1, keyword: undefined }),
+      }),
+    )
+
+    // Open MySQL job modal: only ACTIVE & last_test_ok=true datasources are selectable
+    await wrapper.find('[data-testid="open-mysql-job-btn"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(30)
+    expect(wrapper.text()).not.toContain('mysql_untested_ro')
+
+    // Reject wildcard '*' in select_columns
+    await wrapper.find('#mysql-job-name').setValue('MySQL 抽样验证')
+    await wrapper.find('input[name="mysql_select_columns"]').setValue('*')
+    await wrapper.find('[data-testid="submit-create-job-btn"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(wrapper.find('[data-testid="mysql-select-columns-error"]').text()).toContain('严禁使用 *')
+    expect(postSpy).not.toHaveBeenCalled()
+
+    // Explicit columns populate interactive column-role table and sync JSON
+    await wrapper.find('input[name="mysql_select_columns"]').setValue('id, question, answer')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(wrapper.find('[data-testid="mysql-column-role-table"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="mysql-col-role-answer"]').setValue('REPLAY_SCOPE_AND_HIGH_RISK')
+    await wrapper.find('[data-testid="submit-create-job-btn"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(30)
+
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/admin/jobs/mysql-sample',
+      expect.objectContaining({
+        datasource_code: 'mysql_verified_ro',
+        select_columns: ['id', 'question', 'answer'],
+        column_role_mapping: { answer: 'REPLAY_SCOPE_AND_HIGH_RISK' },
+      }),
+    )
+
+    // Open File Upload job modal: verify即读即焚 notice, CSV isomorphic format default, onUploadProgress
+    postSpy.mockClear()
+    await wrapper.find('[data-testid="open-file-job-btn"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(30)
+    expect(wrapper.text()).toContain('即读即焚')
+
+    const fileInput = wrapper.find('[data-testid="file-job-upload"]')
+    const csvFile = new File(['id,text\n1,张三'], 'sample_batch.csv', { type: 'text/csv' })
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [csvFile],
+    })
+    await fileInput.trigger('change')
+    await vi.advanceTimersByTimeAsync(20)
+
+    await wrapper.find('[data-testid="submit-create-job-btn"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(30)
+
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/v1/jobs/file',
+      expect.any(FormData),
+      expect.objectContaining({
+        onUploadProgress: expect.any(Function),
+      }),
+    )
+    const sentFormData = postSpy.mock.calls[0][1] as FormData
+    expect(sentFormData.get('output_format')).toBe('CSV')
+
+    wrapper.unmount()
+    getSpy.mockRestore()
+    postSpy.mockRestore()
+  })
 })

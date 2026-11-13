@@ -58,6 +58,7 @@
   --ds-space-xl: 24px;
   --ds-space-xxl: 32px;
 
+  --ds-shadow-card: none;
   --ds-shadow-hover: 0 2px 8px rgba(15, 23, 42, 0.05);
   --ds-shadow-popover: 0 4px 16px rgba(15, 23, 42, 0.08);
   --ds-shadow-modal: 0 12px 32px rgba(15, 23, 42, 0.14);
@@ -229,6 +230,34 @@ body {
   font-family: var(--ds-font-mono);
   font-size: 0.75rem;
   opacity: 0.92;
+}
+
+/* Shared Table & Inline Form Validation Utilities */
+.ds-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.ds-data-table th,
+.ds-data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ds-border-subtle);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.ds-data-table th {
+  background: var(--ds-bg-panel);
+  color: var(--ds-text-secondary);
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+.ds-field-error {
+  font-size: 0.75rem;
+  color: var(--ds-color-danger-text);
+  line-height: 1.4;
 }
 
 /* Subtle Neutral Scrollbars */

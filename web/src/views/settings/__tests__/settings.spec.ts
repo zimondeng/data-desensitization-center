@@ -218,17 +218,32 @@ describe('Slice 6: SettingsView Telemetry charts, Show-Once API Key, Datasource 
     } as never)
 
     const wrapper = mount(SettingsView)
-    await new Promise((r) => setTimeout(r, 60))
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('1,280')
+    }, { timeout: 3000 })
 
-    // Tab 1 Telemetry KPIs
+    // Tab 1 Telemetry KPIs & truthful api_key_id=0 label
     expect(wrapper.text()).toContain('1,280')
     expect(wrapper.text()).toContain('980,400')
     expect(wrapper.text()).toContain('35.0')
+    expect(wrapper.text()).toContain('api_key_id=0')
+    expect(wrapper.text()).toContain('不会写入小时级遥测表')
+
+    // Zero hardcoded hex colors in ECharts setOption configs
+    const echartsMod = await import('echarts/core')
+    const initResult = vi.mocked(echartsMod.init).mock.results.find((r) => r.type === 'return')?.value as
+      | { setOption: ReturnType<typeof vi.fn> }
+      | undefined
+    expect(initResult).toBeDefined()
+    expect(initResult!.setOption).toHaveBeenCalled()
+    expect(JSON.stringify(initResult!.setOption.mock.calls)).not.toMatch(/#[0-9a-fA-F]{3,8}/)
 
     // Switch to API Keys tab and create key -> Show-Once dialog opens
     await wrapper.find('[data-testid="tab-api-keys"]').trigger('click')
     await new Promise((r) => setTimeout(r, 30))
     expect(wrapper.text()).toContain('dsk_live_abc')
+    expect(wrapper.text()).toContain('SHA-256')
+    expect(wrapper.text()).not.toContain('HMAC-SHA256')
 
     await wrapper.find('[data-testid="open-create-key-btn"]').trigger('click')
     await new Promise((r) => setTimeout(r, 20))
@@ -245,11 +260,15 @@ describe('Slice 6: SettingsView Telemetry charts, Show-Once API Key, Datasource 
     await new Promise((r) => setTimeout(r, 20))
     expect(wrapper.text()).not.toContain(createdPlainKey)
 
-    // Revoke requires secondary confirm
+    // Revoke requires secondary confirm noting HTTP 403 (not 401)
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
     await wrapper.find('[data-testid="revoke-key-key-1"]').trigger('click')
     await new Promise((r) => setTimeout(r, 20))
-    expect(confirmSpy).toHaveBeenCalled()
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining('403'),
+      expect.any(String),
+      expect.any(Object),
+    )
     expect(deleteSpy).toHaveBeenCalledWith('/api/admin/api-keys/key-1')
     confirmSpy.mockRestore()
 

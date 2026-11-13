@@ -172,6 +172,14 @@ describe('Slice 2: SandboxView 3-state capsules & Zero-Client-Persistence', () =
     expect(allowlistChip.text()).toContain('豁免保留')
     expect(allowlistChip.text()).toContain('gov_public_hotline')
 
+    // Stale-edit guard: editing input after run must NOT misalign SpanHighlightText offsets
+    store.inputText = '未重新运行的编辑文本：李四'
+    await new Promise((r) => setTimeout(r, 10))
+    expect(wrapper.find('.stale-edit-notice').exists()).toBe(true)
+    expect(wrapper.find('.stale-edit-notice').text()).toContain('重新点击「执行脱敏测试」')
+    expect(outputBody.text()).toContain('张三')
+    expect(outputBody.text()).not.toContain('李四')
+
     // Verify Zero-Client-Persistence
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)

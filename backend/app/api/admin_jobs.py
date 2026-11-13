@@ -19,7 +19,6 @@ from app.config import Settings, get_request_settings
 from app.db.base import new_uuid, utcnow
 from app.db.models import AdminUser, BatchJob, DatasourceConn
 from app.db.session import get_session
-from app.engine import PolicyEngineService, get_policy_engine
 from app.jobs.file_readers import preview_masked_artifact, validate_output_format
 from app.jobs.mysql_sampler import (
     build_readonly_sample_query,
@@ -29,6 +28,8 @@ from app.jobs.mysql_sampler import (
 )
 from app.jobs.runner import (
     MysqlSampleTaskSpec,
+    cleanup_unsubmitted_job,
+    find_job_by_no,
     fmt_job_dt,
     generate_job_no,
     get_or_create_job_runner,
@@ -38,29 +39,13 @@ from app.jobs.ttl_cleaner import (
     safe_resolve_artifact_path,
     unlink_job_artifacts_on_disk,
 )
+from app.telemetry import resolve_request_engine
 
 router = APIRouter(prefix="/api/admin/jobs", tags=["admin-jobs"])
 
 SPOT_CHECK_DECISIONS: frozenset[str] = frozenset(
     {"PASSED", "FLAGGED_LEAK", "FLAGGED_OVERMASK"}
 )
-
-
-def _get_engine_for_request(request: Request) -> PolicyEngineService:
-    return getattr(request.app.state, "policy_engine", None) or get_policy_engine()
-
-
-def _find_job_by_no(session: Session, job_no: str) -> BatchJob:
-    clean_no = job_no.strip()
-    row = session.scalar(
-        select(BatchJob).where(
-            BatchJob.job_no == clean_no,
-            BatchJob.is_deleted == 0,
-        )
-    )
-    if row is None:
-        raise NotFoundError(f"Batch job '{clean_no}' not found")
-    return row
 
 
 class CreateMysqlSampleJobRequest(BaseModel):
@@ -147,7 +132,7 @@ def create_mysql_sample_job(
     admin: AdminUser = Depends(require_roles("ADMIN", "OPERATOR")),
 ) -> dict[str, Any]:
     settings: Settings = get_request_settings(request)
-    engine = _get_engine_for_request(request)
+    engine = resolve_request_engine(request)
 
     clean_job_name = body.job_name.strip()
     if not clean_job_name:
@@ -188,10 +173,7 @@ def create_mysql_sample_job(
     snapshot = engine.resolve_policy(
         session, body.policy_code.strip(), body.policy_version
     )
-    try:
-        clean_job_name = engine.mask_text(clean_job_name[:128], snapshot).masked_text[:128]
-    except Exception:
-        clean_job_name = clean_job_name[:128]
+    clean_job_name = engine.mask_text(clean_job_name[:128], snapshot).masked_text[:128]
 
     eff_ttl = (
         settings.default_artifact_ttl_hours
@@ -240,21 +222,26 @@ def create_mysql_sample_job(
     session.flush()
     session.refresh(job_row)
     session.commit()
+    job_id = job_row.id
 
     runner = get_or_create_job_runner(request.app)
-    runner.submit_mysql_job(
-        MysqlSampleTaskSpec(
-            job_id=job_row.id,
-            job_no=job_row.job_no,
-            datasource_id=datasource.id,
-            sql=sql,
-            params=params,
-            select_columns=clean_cols,
-            output_format=out_fmt,
-            snapshot=snapshot,
-            column_role_mapping=validated_col_roles,
+    try:
+        runner.submit_mysql_job(
+            MysqlSampleTaskSpec(
+                job_id=job_id,
+                job_no=job_row.job_no,
+                datasource_id=datasource.id,
+                sql=sql,
+                params=params,
+                select_columns=clean_cols,
+                output_format=out_fmt,
+                snapshot=snapshot,
+                column_role_mapping=validated_col_roles,
+            )
         )
-    )
+    except Exception:
+        cleanup_unsubmitted_job(session, job_id)
+        raise
 
     return ok_response(
         {
@@ -285,7 +272,7 @@ def preview_batch_job_masked_artifact(
     _admin: AdminUser = Depends(require_roles("ADMIN", "OPERATOR", "AUDITOR")),
 ) -> dict[str, Any]:
     settings = get_request_settings(request)
-    row = _find_job_by_no(session, job_no)
+    row = find_job_by_no(session, job_no)
 
     now = utcnow()
     if row.status == "ARTIFACT_EXPIRED":
@@ -343,7 +330,7 @@ def submit_job_spot_check(
     admin: AdminUser = Depends(require_roles("ADMIN", "AUDITOR")),
 ) -> dict[str, Any]:
     settings = get_request_settings(request)
-    row = _find_job_by_no(session, job_no)
+    row = find_job_by_no(session, job_no)
 
     decision = body.spot_check_status.strip().upper()
     if decision not in SPOT_CHECK_DECISIONS:
@@ -378,5 +365,5 @@ def get_admin_batch_job_detail(
     _admin: AdminUser = Depends(require_roles("ADMIN", "OPERATOR", "AUDITOR")),
 ) -> dict[str, Any]:
     settings = get_request_settings(request)
-    row = _find_job_by_no(session, job_no)
+    row = find_job_by_no(session, job_no)
     return ok_response(serialize_batch_job(row, settings), request=request)

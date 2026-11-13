@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import re
 from typing import Any
 
@@ -10,7 +9,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
-from app.common.envelope import ok_response
+from app.common.envelope import format_optional_utc_ms, ok_response
 from app.common.errors import BadRequestError, NotFoundError
 from app.db.base import new_uuid, utcnow
 from app.db.models import AdminUser, AllowlistDict
@@ -28,14 +27,6 @@ router = APIRouter(prefix="/api/admin/allowlists", tags=["admin-allowlists"])
 _GROUP_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
-def _fmt_dt(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.isoformat(timespec="milliseconds") + "Z"
-
-
 def _serialize_allowlist_item(row: AllowlistDict) -> dict[str, Any]:
     labels = list(row.apply_labels_json or [])
     return {
@@ -50,8 +41,8 @@ def _serialize_allowlist_item(row: AllowlistDict) -> dict[str, Any]:
         "is_enabled": bool(row.is_enabled),
         "remark": row.remark,
         "created_by": row.created_by,
-        "create_time": _fmt_dt(row.create_time),
-        "update_time": _fmt_dt(row.update_time),
+        "create_time": format_optional_utc_ms(row.create_time),
+        "update_time": format_optional_utc_ms(row.update_time),
     }
 
 

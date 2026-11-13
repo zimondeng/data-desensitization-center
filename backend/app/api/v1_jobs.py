@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import CallerPrincipal, require_job_caller
@@ -17,17 +16,18 @@ from app.common.errors import (
     ArtifactExpiredError,
     BadRequestError,
     ConflictLeakBlockedError,
-    NotFoundError,
 )
 from app.config import Settings, get_request_settings
 from app.db.base import new_uuid, utcnow
 from app.db.models import BatchJob
 from app.db.session import get_session
-from app.engine import PolicyEngineService, get_policy_engine
+from app.engine import PolicyEngineService
 from app.jobs.file_readers import OUTPUT_MEDIA_TYPES, resolve_file_formats
 from app.jobs.mysql_sampler import validate_column_role_mapping
 from app.jobs.runner import (
     FileJobTaskSpec,
+    cleanup_unsubmitted_job,
+    find_job_by_no,
     fmt_job_dt,
     generate_job_no,
     get_or_create_job_runner,
@@ -37,25 +37,9 @@ from app.jobs.ttl_cleaner import (
     safe_resolve_artifact_path,
     unlink_job_artifacts_on_disk,
 )
+from app.telemetry import resolve_request_engine
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["v1-jobs"])
-
-
-def _get_engine_for_request(request: Request) -> PolicyEngineService:
-    return getattr(request.app.state, "policy_engine", None) or get_policy_engine()
-
-
-def _find_job_by_no(session: Session, job_no: str) -> BatchJob:
-    clean_no = job_no.strip()
-    row = session.scalar(
-        select(BatchJob).where(
-            BatchJob.job_no == clean_no,
-            BatchJob.is_deleted == 0,
-        )
-    )
-    if row is None:
-        raise NotFoundError(f"Batch job '{clean_no}' not found")
-    return row
 
 
 async def _stream_upload_to_tmp(
@@ -91,10 +75,7 @@ def _sanitize_masked_filename(
     safe_base = Path(raw_filename.replace("\\", "/")).name
     stem = safe_base[: -len(ext_lower)] if safe_base.lower().endswith(ext_lower) else safe_base
     stem = stem.strip() or "uploaded_file"
-    try:
-        masked_stem = engine.mask_text(stem[:120], snapshot).masked_text
-    except Exception:
-        masked_stem = "uploaded_file"
+    masked_stem = engine.mask_text(stem[:120], snapshot).masked_text
     return f"{masked_stem}{ext_lower}"[:255]
 
 
@@ -112,7 +93,7 @@ async def create_file_batch_job(
     caller: CallerPrincipal = Depends(require_job_caller("ADMIN", "OPERATOR")),
 ) -> dict[str, Any]:
     settings: Settings = get_request_settings(request)
-    engine = _get_engine_for_request(request)
+    engine = resolve_request_engine(request)
 
     try:
         input_fmt, out_fmt, ext_lower = resolve_file_formats(
@@ -167,10 +148,7 @@ async def create_file_batch_job(
         )
         raw_job_name = (job_name or "").strip()
         if raw_job_name:
-            try:
-                clean_job_name = engine.mask_text(raw_job_name[:128], snapshot).masked_text
-            except Exception:
-                clean_job_name = raw_job_name
+            clean_job_name = engine.mask_text(raw_job_name[:128], snapshot).masked_text
         else:
             clean_job_name = masked_filename
         if len(clean_job_name) > 128:
@@ -207,19 +185,24 @@ async def create_file_batch_job(
         session.flush()
         session.refresh(job_row)
         session.commit()
+        job_id = job_row.id
 
         runner = get_or_create_job_runner(request.app)
-        runner.submit_file_job(
-            FileJobTaskSpec(
-                job_id=job_row.id,
-                job_no=job_row.job_no,
-                src_tmp_path=tmp_path,
-                input_format=input_fmt,
-                output_format=out_fmt,
-                snapshot=snapshot,
-                column_role_mapping=parsed_col_mapping,
+        try:
+            runner.submit_file_job(
+                FileJobTaskSpec(
+                    job_id=job_id,
+                    job_no=job_row.job_no,
+                    src_tmp_path=tmp_path,
+                    input_format=input_fmt,
+                    output_format=out_fmt,
+                    snapshot=snapshot,
+                    column_role_mapping=parsed_col_mapping,
+                )
             )
-        )
+        except Exception:
+            cleanup_unsubmitted_job(session, job_id)
+            raise
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
@@ -254,7 +237,7 @@ def get_batch_job_detail(
     ),
 ) -> dict[str, Any]:
     settings = get_request_settings(request)
-    row = _find_job_by_no(session, job_no)
+    row = find_job_by_no(session, job_no)
     return ok_response(serialize_batch_job(row, settings), request=request)
 
 
@@ -266,7 +249,7 @@ def cancel_batch_job(
     _caller: CallerPrincipal = Depends(require_job_caller("ADMIN", "OPERATOR")),
 ) -> dict[str, Any]:
     settings = get_request_settings(request)
-    row = _find_job_by_no(session, job_no)
+    row = find_job_by_no(session, job_no)
 
     if row.status in ("COMPLETED", "FAILED", "ARTIFACT_EXPIRED"):
         raise BadRequestError(
@@ -309,7 +292,7 @@ def download_batch_job_artifact(
     ),
 ) -> FileResponse:
     settings = get_request_settings(request)
-    row = _find_job_by_no(session, job_no)
+    row = find_job_by_no(session, job_no)
 
     # Gate 1: Spot-check leak block -> 409 / 40901
     if row.spot_check_status == "FLAGGED_LEAK":

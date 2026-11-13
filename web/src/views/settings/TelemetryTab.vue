@@ -5,7 +5,9 @@ import { BarChart, LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import StatusTag from '@/components/StatusTag.vue'
+import { extractErrorMessage } from '@/api/client'
 import { fetchHourlyMetrics } from '@/api/metrics'
+import { resolveChartPalette } from '@/styles/themeTokens'
 import type { MetricsHourlyResponseData } from '@/types/api'
 
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
@@ -26,8 +28,8 @@ const hasDistribution = computed(() => (metrics.value?.entity_distribution.lengt
 
 const scopeBadgeLabel = computed(() =>
   includeSandbox.value
-    ? '统计口径：含沙盒测试与 /api/v1/* 调用'
-    : '统计口径：仅 /api/v1/* 生产接口（已排除沙盒）',
+    ? '统计口径：含无 Key 内部调用桶 (api_key_id=0) 与 /api/v1/*'
+    : '统计口径：仅 /api/v1/* API Key 调用（已排除 api_key_id=0 桶）',
 )
 
 function formatNumber(value: number | null | undefined, digits = 0): string {
@@ -38,6 +40,7 @@ function formatNumber(value: number | null | undefined, digits = 0): string {
 
 function renderCharts() {
   if (!metrics.value) return
+  const palette = resolveChartPalette()
 
   if (lineChartRef.value && hasBuckets.value) {
     if (!lineChart) {
@@ -61,21 +64,21 @@ function renderCharts() {
       xAxis: {
         type: 'category',
         data: buckets.map((b) => b.hour_bucket.slice(5, 16)),
-        axisLabel: { color: '#64748B', fontSize: 11 },
+        axisLabel: { color: palette.textMuted, fontSize: 11 },
       },
       yAxis: [
         {
           type: 'value',
           name: '次',
-          nameTextStyle: { color: '#64748B' },
-          axisLabel: { color: '#64748B' },
-          splitLine: { lineStyle: { color: '#E2E8F0' } },
+          nameTextStyle: { color: palette.textMuted },
+          axisLabel: { color: palette.textMuted },
+          splitLine: { lineStyle: { color: palette.borderSubtle } },
         },
         {
           type: 'value',
           name: 'ms',
-          nameTextStyle: { color: '#64748B' },
-          axisLabel: { color: '#64748B' },
+          nameTextStyle: { color: palette.textMuted },
+          axisLabel: { color: palette.textMuted },
           splitLine: { show: false },
         },
       ],
@@ -86,8 +89,8 @@ function renderCharts() {
           yAxisIndex: 0,
           smooth: false,
           data: buckets.map((b) => b.request_count),
-          lineStyle: { color: '#165DFF', width: 2, type: 'solid' },
-          itemStyle: { color: '#165DFF' },
+          lineStyle: { color: palette.primary, width: 2, type: 'solid' },
+          itemStyle: { color: palette.primary },
         },
         {
           name: '平均耗时（ms）',
@@ -95,8 +98,8 @@ function renderCharts() {
           yAxisIndex: 1,
           smooth: false,
           data: buckets.map((b) => Number(b.avg_elapsed_ms.toFixed(1))),
-          lineStyle: { color: '#B45309', width: 2, type: 'dashed' },
-          itemStyle: { color: '#B45309' },
+          lineStyle: { color: palette.warning, width: 2, type: 'dashed' },
+          itemStyle: { color: palette.warning },
         },
       ],
     })
@@ -125,13 +128,13 @@ function renderCharts() {
       xAxis: {
         type: 'value',
         name: '处',
-        axisLabel: { color: '#64748B' },
-        splitLine: { lineStyle: { color: '#E2E8F0' } },
+        axisLabel: { color: palette.textMuted },
+        splitLine: { lineStyle: { color: palette.borderSubtle } },
       },
       yAxis: {
         type: 'category',
         data: sorted.map((d) => d.display_name || d.label_zh || d.label),
-        axisLabel: { color: '#0F172A', fontSize: 12 },
+        axisLabel: { color: palette.textPrimary, fontSize: 12 },
       },
       series: [
         {
@@ -141,7 +144,7 @@ function renderCharts() {
           data: sorted.map((d) => ({
             value: d.count,
             itemStyle: {
-              color: d.detector === 'regex' ? '#B45309' : '#165DFF',
+              color: d.detector === 'regex' ? palette.warning : palette.primary,
             },
           })),
         },
@@ -161,7 +164,7 @@ async function loadMetrics() {
     await nextTick()
     renderCharts()
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : '加载用量遥测统计失败'
+    loadError.value = extractErrorMessage(err, '加载用量遥测统计失败')
   } finally {
     loading.value = false
   }
@@ -200,16 +203,24 @@ onBeforeUnmount(() => {
           <el-option label="最近 30 天 (720h)" :value="720" />
         </el-select>
 
-        <el-checkbox v-model="includeSandbox">
-          统计包含沙盒在线验证请求
-        </el-checkbox>
+        <el-tooltip
+          content="在线沙盒遵循零写库边界（绝不落库或打日志），不会写入小时级遥测表"
+          placement="top"
+        >
+          <el-checkbox v-model="includeSandbox">
+            统计包含无 Key 内部调用桶 (api_key_id=0)
+          </el-checkbox>
+        </el-tooltip>
 
         <el-button @click="loadMetrics">刷新统计</el-button>
       </div>
 
       <div class="telemetry-toolbar__meta">
         <StatusTag :label="scopeBadgeLabel" tag-type="info" />
-        <span v-if="metrics?.updated_at" class="ds-muted-text ds-mono">
+        <span class="ds-muted-text">
+          在线沙盒遵循零写库边界（绝不落库或打日志），不会写入小时级遥测表
+        </span>
+        <span v-if="metrics?.updated_at" class="ds-muted-text ds-mono ds-tabular-nums">
           更新时间：{{ metrics.updated_at.replace('T', ' ').slice(0, 19) }}
         </span>
       </div>

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -10,29 +10,17 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
 from app.auth.security import generate_api_key, validate_allowed_ips_config
-from app.common.envelope import ok_response
+from app.common.envelope import (
+    format_optional_utc_ms,
+    normalize_utc_naive,
+    ok_response,
+)
 from app.common.errors import BadRequestError, NotFoundError
 from app.db.base import new_uuid, utcnow
 from app.db.models import AdminUser, ApiKey
 from app.db.session import get_session
 
 router = APIRouter(prefix="/api/admin/api-keys", tags=["admin-api-keys"])
-
-
-def _fmt_dt(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.isoformat(timespec="milliseconds") + "Z"
-
-
-def _normalize_utc_naive(dt: datetime | None) -> datetime | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        return dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt
 
 
 def _serialize_api_key(row: ApiKey) -> dict[str, Any]:
@@ -45,11 +33,11 @@ def _serialize_api_key(row: ApiKey) -> dict[str, Any]:
         "rate_limit_rpm": row.rate_limit_rpm,
         "allowed_ips": row.allowed_ips_json,
         "status": row.status,
-        "expires_at": _fmt_dt(row.expires_at),
-        "last_used_at": _fmt_dt(row.last_used_at),
+        "expires_at": format_optional_utc_ms(row.expires_at),
+        "last_used_at": format_optional_utc_ms(row.last_used_at),
         "created_by": row.created_by,
-        "create_time": _fmt_dt(row.create_time),
-        "update_time": _fmt_dt(row.update_time),
+        "create_time": format_optional_utc_ms(row.create_time),
+        "update_time": format_optional_utc_ms(row.update_time),
     }
 
 
@@ -105,7 +93,11 @@ def create_api_key(
         rate_limit_rpm=body.rate_limit_rpm,
         allowed_ips_json=validated_ips,
         status="ACTIVE",
-        expires_at=_normalize_utc_naive(body.expires_at),
+        expires_at=(
+            normalize_utc_naive(body.expires_at)
+            if body.expires_at is not None
+            else None
+        ),
         created_by=admin.username,
         is_deleted=0,
     )

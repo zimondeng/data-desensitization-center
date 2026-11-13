@@ -306,6 +306,42 @@ def _overlaps_any(start: int, end: int, ranges: list[tuple[int, int]]) -> bool:
     return any(start < r_end and r_start < end for r_start, r_end in ranges)
 
 
+def _assemble_sandbox_spans(
+    planned_items: Sequence[PlannedReplacement],
+    exempted_spans: Sequence[Any],
+    protected_ranges: list[tuple[int, int]],
+) -> list[SandboxSpanDetail]:
+    """Assemble sorted masked + exempted sandbox span trace entries."""
+    spans: list[SandboxSpanDetail] = [
+        SandboxSpanDetail(
+            kind="masked",
+            label=item.label,
+            orig_start=item.orig_start,
+            orig_end=item.orig_end,
+            detector=item.detector,
+            score=item.score,
+            replacement=item.replacement,
+        )
+        for item in planned_items
+    ]
+    for ex in exempted_spans:
+        if not _overlaps_any(ex.start, ex.end, protected_ranges):
+            spans.append(
+                SandboxSpanDetail(
+                    kind="exempted",
+                    label=ex.label,
+                    orig_start=ex.start,
+                    orig_end=ex.end,
+                    detector=ex.detector,
+                    score=ex.score,
+                    allowlist_group=ex.group_code,
+                    allowlist_rule=ex.rule_name,
+                )
+            )
+    spans.sort(key=lambda s: (s.orig_start, s.orig_end))
+    return spans
+
+
 def _find_protected_mask_ranges(
     text: str,
     entity_rules: Mapping[str, Mapping[str, Any]] | None = None,
@@ -581,35 +617,11 @@ class PolicyEngineService:
                     )
                 )
 
-        sandbox_spans: list[SandboxSpanDetail] = []
-        if sandbox_trace:
-            for item in planned:
-                sandbox_spans.append(
-                    SandboxSpanDetail(
-                        kind="masked",
-                        label=item.label,
-                        orig_start=item.orig_start,
-                        orig_end=item.orig_end,
-                        detector=item.detector,
-                        score=item.score,
-                        replacement=item.replacement,
-                    )
-                )
-            for ex in detection.exempted_spans:
-                if not _overlaps_any(ex.start, ex.end, protected_ranges):
-                    sandbox_spans.append(
-                        SandboxSpanDetail(
-                            kind="exempted",
-                            label=ex.label,
-                            orig_start=ex.start,
-                            orig_end=ex.end,
-                            detector=ex.detector,
-                            score=ex.score,
-                            allowlist_group=ex.group_code,
-                            allowlist_rule=ex.rule_name,
-                        )
-                    )
-            sandbox_spans.sort(key=lambda s: (s.orig_start, s.orig_end))
+        sandbox_spans = (
+            _assemble_sandbox_spans(planned, detection.exempted_spans, protected_ranges)
+            if sandbox_trace
+            else []
+        )
 
         return masked_text, planned, masked_spans, sandbox_spans
 
@@ -655,7 +667,7 @@ class PolicyEngineService:
 
         # Step B: High-risk-only rescan (skips landline phone, private_address, url, etc.)
         high_risk_planned: list[PlannedReplacement] = []
-        exempted_details: list[SandboxSpanDetail] = []
+        raw_exempted: Sequence[Any] = ()
         if high_risk_labels and text:
             try:
                 detection = self._get_pipeline().detect(
@@ -688,20 +700,7 @@ class PolicyEngineService:
                 write_replay=False,
             )
             if sandbox_trace:
-                for ex in detection.exempted_spans:
-                    if not _overlaps_any(ex.start, ex.end, protected_ranges):
-                        exempted_details.append(
-                            SandboxSpanDetail(
-                                kind="exempted",
-                                label=ex.label,
-                                orig_start=ex.start,
-                                orig_end=ex.end,
-                                detector=ex.detector,
-                                score=ex.score,
-                                allowlist_group=ex.group_code,
-                                allowlist_rule=ex.rule_name,
-                            )
-                        )
+                raw_exempted = detection.exempted_spans
 
         combined = sorted(
             [*replay_planned, *high_risk_planned],
@@ -709,22 +708,11 @@ class PolicyEngineService:
         )
         masked_text, _ = replace_spans_reverse(text, combined)
 
-        sandbox_spans: list[SandboxSpanDetail] = []
-        if sandbox_trace:
-            for item in combined:
-                sandbox_spans.append(
-                    SandboxSpanDetail(
-                        kind="masked",
-                        label=item.label,
-                        orig_start=item.orig_start,
-                        orig_end=item.orig_end,
-                        detector=item.detector,
-                        score=item.score,
-                        replacement=item.replacement,
-                    )
-                )
-            sandbox_spans.extend(exempted_details)
-            sandbox_spans.sort(key=lambda s: (s.orig_start, s.orig_end))
+        sandbox_spans = (
+            _assemble_sandbox_spans(combined, raw_exempted, protected_ranges)
+            if sandbox_trace
+            else []
+        )
 
         return masked_text, combined, sandbox_spans
 

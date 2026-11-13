@@ -341,6 +341,66 @@ def _iter_text_lines(src_path: Path) -> Iterator[str]:
         raise FileParseError("Input text file is not valid UTF-8 text") from None
 
 
+def _run_streaming_artifact(
+    *,
+    dest_final_path: Path,
+    output_format: str,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int, int], None] | None,
+    progress_interval: int,
+    populate: Callable[[_StreamingArtifactWriter, Callable[[int, Mapping[str, int]], None]], None],
+) -> ArtifactProcessSummary:
+    dest_final_path.parent.mkdir(parents=True, exist_ok=True)
+    part_path = dest_final_path.with_name(dest_final_path.name + ".part")
+
+    writer = _StreamingArtifactWriter(part_path, output_format)
+    succeeded = False
+    total_records = 0
+    processed_records = 0
+    total_chars = 0
+    hit_counts: dict[str, int] = {}
+
+    def _record_step(chars: int, hits: Mapping[str, int]) -> None:
+        nonlocal total_records, processed_records, total_chars
+        total_records += 1
+        processed_records += 1
+        total_chars += chars
+        for lbl, cnt in hits.items():
+            hit_counts[lbl] = hit_counts.get(lbl, 0) + cnt
+        if on_progress is not None and processed_records % progress_interval == 0:
+            on_progress(total_records, processed_records, total_chars)
+
+    try:
+        populate(writer, _record_step)
+
+        if should_cancel is not None and should_cancel():
+            raise JobCancelledError("Job cancelled")
+
+        writer.close(save_xlsx=True)
+
+        if should_cancel is not None and should_cancel():
+            raise JobCancelledError("Job cancelled")
+
+        size_bytes, sha256_hex = _compute_file_size_and_sha256(part_path)
+        part_path.replace(dest_final_path)
+        succeeded = True
+
+        return ArtifactProcessSummary(
+            total_records=total_records,
+            processed_records=processed_records,
+            failed_records=0,
+            total_chars=total_chars,
+            hit_counts=hit_counts,
+            output_size_bytes=size_bytes,
+            output_sha256=sha256_hex,
+        )
+    finally:
+        writer.close(save_xlsx=False)
+        if not succeeded:
+            part_path.unlink(missing_ok=True)
+            dest_final_path.unlink(missing_ok=True)
+
+
 def process_record_stream_to_artifact(
     *,
     records: Iterable[tuple[dict[str, Any], list[str] | None]],
@@ -353,17 +413,10 @@ def process_record_stream_to_artifact(
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int, int, int], None] | None = None,
 ) -> ArtifactProcessSummary:
-    dest_final_path.parent.mkdir(parents=True, exist_ok=True)
-    part_path = dest_final_path.with_name(dest_final_path.name + ".part")
-
-    writer = _StreamingArtifactWriter(part_path, output_format)
-    succeeded = False
-    total_records = 0
-    processed_records = 0
-    total_chars = 0
-    hit_counts: dict[str, int] = {}
-
-    try:
+    def _populate(
+        writer: _StreamingArtifactWriter,
+        record_step: Callable[[int, Mapping[str, int]], None],
+    ) -> None:
         for raw_rec, field_order in records:
             if should_cancel is not None and should_cancel():
                 raise JobCancelledError("Job cancelled")
@@ -380,51 +433,26 @@ def process_record_stream_to_artifact(
             )
             masked_rec = res.masked_payload
             if preserve_sql_types:
-                # Preserve original int/float on untouched PASSTHROUGH columns
+                # Preserve original int/float when masking did not alter the value
                 for k, orig_v in raw_rec.items():
                     if (
                         isinstance(orig_v, (int, float))
                         and not isinstance(orig_v, bool)
-                        and masked_rec.get(k) == orig_v
+                        and masked_rec.get(k) == rec_to_mask.get(k)
                     ):
                         masked_rec[k] = orig_v
 
             writer.write_record(masked_rec, field_order=field_order)
-            total_records += 1
-            processed_records += 1
-            total_chars += res.char_count
-            for lbl, cnt in res.hit_counts.items():
-                hit_counts[lbl] = hit_counts.get(lbl, 0) + cnt
+            record_step(res.char_count, res.hit_counts)
 
-            if on_progress is not None and processed_records % 25 == 0:
-                on_progress(total_records, processed_records, total_chars)
-
-        if should_cancel is not None and should_cancel():
-            raise JobCancelledError("Job cancelled")
-
-        writer.close(save_xlsx=True)
-
-        if should_cancel is not None and should_cancel():
-            raise JobCancelledError("Job cancelled")
-
-        size_bytes, sha256_hex = _compute_file_size_and_sha256(part_path)
-        part_path.replace(dest_final_path)
-        succeeded = True
-
-        return ArtifactProcessSummary(
-            total_records=total_records,
-            processed_records=processed_records,
-            failed_records=0,
-            total_chars=total_chars,
-            hit_counts=hit_counts,
-            output_size_bytes=size_bytes,
-            output_sha256=sha256_hex,
-        )
-    finally:
-        writer.close(save_xlsx=False)
-        if not succeeded:
-            part_path.unlink(missing_ok=True)
-            dest_final_path.unlink(missing_ok=True)
+    return _run_streaming_artifact(
+        dest_final_path=dest_final_path,
+        output_format=output_format,
+        should_cancel=should_cancel,
+        on_progress=on_progress,
+        progress_interval=25,
+        populate=_populate,
+    )
 
 
 def _process_text_stream_to_artifact(
@@ -437,71 +465,43 @@ def _process_text_stream_to_artifact(
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int, int, int], None] | None = None,
 ) -> ArtifactProcessSummary:
-    dest_final_path.parent.mkdir(parents=True, exist_ok=True)
-    part_path = dest_final_path.with_name(dest_final_path.name + ".part")
-
-    writer = _StreamingArtifactWriter(part_path, output_format)
-    succeeded = False
-    total_records = 0
-    processed_records = 0
-    total_chars = 0
-    hit_counts: dict[str, int] = {}
-
     doc_scope = (
         EphemeralScopeDict(mode="CONVERSATION")
         if snapshot.scope_mode == "CONVERSATION"
         else None
     )
 
-    try:
-        for line_idx, raw_line in enumerate(lines, start=1):
-            if should_cancel is not None and should_cancel():
-                raise JobCancelledError("Job cancelled")
+    def _populate(
+        writer: _StreamingArtifactWriter,
+        record_step: Callable[[int, Mapping[str, int]], None],
+    ) -> None:
+        try:
+            for line_idx, raw_line in enumerate(lines, start=1):
+                if should_cancel is not None and should_cancel():
+                    raise JobCancelledError("Job cancelled")
 
-            total_chars += len(raw_line)
-            if raw_line:
-                res = engine.mask_text(raw_line, snapshot, scope=doc_scope)
-                masked_line = res.masked_text
-                for lbl, cnt in res.hit_counts.items():
-                    hit_counts[lbl] = hit_counts.get(lbl, 0) + cnt
-            else:
-                masked_line = ""
+                if raw_line:
+                    res = engine.mask_text(raw_line, snapshot, scope=doc_scope)
+                    masked_line = res.masked_text
+                    hits: Mapping[str, int] = res.hit_counts
+                else:
+                    masked_line = ""
+                    hits = {}
 
-            writer.write_text_line(masked_line, line_idx)
-            total_records += 1
-            processed_records += 1
+                writer.write_text_line(masked_line, line_idx)
+                record_step(len(raw_line), hits)
+        finally:
+            if doc_scope is not None:
+                doc_scope.clear()
 
-            if on_progress is not None and processed_records % 50 == 0:
-                on_progress(total_records, processed_records, total_chars)
-
-        if should_cancel is not None and should_cancel():
-            raise JobCancelledError("Job cancelled")
-
-        writer.close(save_xlsx=True)
-
-        if should_cancel is not None and should_cancel():
-            raise JobCancelledError("Job cancelled")
-
-        size_bytes, sha256_hex = _compute_file_size_and_sha256(part_path)
-        part_path.replace(dest_final_path)
-        succeeded = True
-
-        return ArtifactProcessSummary(
-            total_records=total_records,
-            processed_records=processed_records,
-            failed_records=0,
-            total_chars=total_chars,
-            hit_counts=hit_counts,
-            output_size_bytes=size_bytes,
-            output_sha256=sha256_hex,
-        )
-    finally:
-        if doc_scope is not None:
-            doc_scope.clear()
-        writer.close(save_xlsx=False)
-        if not succeeded:
-            part_path.unlink(missing_ok=True)
-            dest_final_path.unlink(missing_ok=True)
+    return _run_streaming_artifact(
+        dest_final_path=dest_final_path,
+        output_format=output_format,
+        should_cancel=should_cancel,
+        on_progress=on_progress,
+        progress_interval=50,
+        populate=_populate,
+    )
 
 
 def process_uploaded_file_and_unlink(

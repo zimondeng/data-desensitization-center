@@ -367,3 +367,88 @@ def test_streaming_file_readers_all_five_formats_windows_openpyxl_close_and_zero
         pipeline.shutdown()
 
 
+def test_jsonl_export_preserves_untouched_numeric_types_under_mask_roles(tmp_path) -> None:
+    import json
+    import numpy as np
+
+    from app.detectors import DEFAULT_ID2LABEL, HybridDetectorPipeline, OnnxNerDetector
+    from app.engine import PolicyEngineService
+    from app.jobs.file_readers import process_record_stream_to_artifact
+
+    label2id = {lbl: idx for idx, lbl in DEFAULT_ID2LABEL.items()}
+
+    class _NoopOnnx(OnnxNerDetector):
+        def __init__(self) -> None:
+            class _Tok:
+                def encode(s_tok, text: str):
+                    class _Enc:
+                        ids = [0, *[100 + i for i in range(len(text))], 2]
+                        offsets = [(0, 0), *[(i, i + 1) for i in range(len(text))], (0, 0)]
+
+                    return _Enc()
+
+            class _Sess:
+                def run(s_sess, out_names, feed):
+                    ids = feed["input_ids"]
+                    logits = np.zeros((1, ids.shape[1], 21), dtype=np.float32)
+                    logits[:, :, label2id["O"]] = 10.0
+                    return [logits]
+
+            super().__init__(session=_Sess(), tokenizer=_Tok())
+
+    pipeline = HybridDetectorPipeline(onnx_detector=_NoopOnnx())
+    try:
+        engine = PolicyEngineService(pipeline=pipeline, hash_salt="unit-salt")
+        snapshot = engine.build_inline_snapshot(
+            policy_id=1,
+            policy_code="num_preserve_test",
+            version=1,
+            scope_mode="CONVERSATION",
+            entity_rules={
+                "phone": {"enabled": True, "min_score": 0.5, "action": "PLACEHOLDER"},
+                "cn_mobile": {"enabled": True, "min_score": 0.5, "action": "PLACEHOLDER"},
+            },
+            field_role_rules={"default_role": "FULL_MASK_WRITE_SCOPE", "rules": []},
+        )
+        out_path = tmp_path / "out.jsonl"
+        records = [
+            (
+                {
+                    "id": 42,
+                    "score": 98.5,
+                    "zero": 0,
+                    "flag": True,
+                    "mobile_num": 13812345678,
+                    "replay_count": 7,
+                },
+                ["id", "score", "zero", "flag", "mobile_num", "replay_count"],
+            )
+        ]
+        process_record_stream_to_artifact(
+            records=records,
+            dest_final_path=out_path,
+            output_format="JSONL",
+            snapshot=snapshot,
+            engine=engine,
+            column_role_mapping={
+                "id": "FULL_MASK_WRITE_SCOPE",
+                "score": "FULL_MASK_WRITE_SCOPE",
+                "zero": "FULL_MASK_WRITE_SCOPE",
+                "flag": "FULL_MASK_WRITE_SCOPE",
+                "mobile_num": "FULL_MASK_WRITE_SCOPE",
+                "replay_count": "REPLAY_SCOPE_AND_HIGH_RISK",
+            },
+            preserve_sql_types=True,
+        )
+        row = json.loads(out_path.read_text(encoding="utf-8").strip())
+        assert row["id"] == 42 and type(row["id"]) is int
+        assert row["score"] == 98.5 and type(row["score"]) is float
+        assert row["zero"] == 0 and type(row["zero"]) is int
+        assert row["flag"] is True and type(row["flag"]) is bool
+        assert row["replay_count"] == 7 and type(row["replay_count"]) is int
+        assert row["mobile_num"] == "<PHONE_1>"
+    finally:
+        pipeline.shutdown()
+
+
+

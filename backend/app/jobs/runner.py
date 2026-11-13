@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import secrets
 import threading
@@ -17,7 +18,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.common.errors import BadRequestError
+from app.common.envelope import format_optional_utc_ms
+from app.common.errors import BadRequestError, NotFoundError
 from app.common.logging import get_safe_logger
 from app.config import Settings, get_settings
 from app.db.base import utcnow
@@ -48,11 +50,29 @@ _JOB_SEQ_COUNTER = 0
 
 
 def fmt_job_dt(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.isoformat(timespec="milliseconds") + "Z"
+    return format_optional_utc_ms(dt)
+
+
+def find_job_by_no(session: Session, job_no: str) -> BatchJob:
+    clean_no = job_no.strip()
+    row = session.scalar(
+        select(BatchJob).where(
+            BatchJob.job_no == clean_no,
+            BatchJob.is_deleted == 0,
+        )
+    )
+    if row is None:
+        raise NotFoundError(f"Batch job '{clean_no}' not found")
+    return row
+
+
+def cleanup_unsubmitted_job(session: Session, job_id: int) -> None:
+    """Remove a freshly committed PENDING BatchJob if background submission fails."""
+    session.rollback()
+    row = session.get(BatchJob, job_id)
+    if row is not None:
+        session.delete(row)
+        session.commit()
 
 
 def generate_job_no(session: Session) -> str:
@@ -196,7 +216,7 @@ class JobRunner:
     def _mysql_connector_factory(self) -> MysqlConnectorFactory | None:
         return getattr(self._app.state, "mysql_connector_factory", None)
 
-    def _execution_hook(self):
+    def _execution_hook(self) -> Callable[[str, threading.Event], Any] | None:
         return getattr(self._app.state, "job_execution_hook", None)
 
     def request_cancel(self, job_no: str) -> None:
@@ -221,8 +241,12 @@ class JobRunner:
                 spec.src_tmp_path.unlink(missing_ok=True)
                 raise BadRequestError("Batch job runner is shutting down")
             cancel_ev = self._cancel_events.setdefault(spec.job_no, threading.Event())
+            try:
+                fut = self._executor.submit(self._run_file_job, spec, cancel_ev)
+            except Exception:
+                self._cancel_events.pop(spec.job_no, None)
+                raise
             self._tmp_paths[spec.job_no] = spec.src_tmp_path
-            fut = self._executor.submit(self._run_file_job, spec, cancel_ev)
             self._futures[spec.job_no] = fut
 
     def submit_mysql_job(self, spec: MysqlSampleTaskSpec) -> None:
@@ -230,7 +254,11 @@ class JobRunner:
             if self._shutdown:
                 raise BadRequestError("Batch job runner is shutting down")
             cancel_ev = self._cancel_events.setdefault(spec.job_no, threading.Event())
-            fut = self._executor.submit(self._run_mysql_job, spec, cancel_ev)
+            try:
+                fut = self._executor.submit(self._run_mysql_job, spec, cancel_ev)
+            except Exception:
+                self._cancel_events.pop(spec.job_no, None)
+                raise
             self._futures[spec.job_no] = fut
 
     def _mark_running_if_pending(
@@ -539,7 +567,7 @@ def ensure_static_pool_thread_safe(app: FastAPI) -> None:
                 state["owner"] = None
                 cond.notify_all()
 
-    def _locked_connect():
+    def _locked_connect() -> Any:
         _acquire()
         flag = [False]
         try:
