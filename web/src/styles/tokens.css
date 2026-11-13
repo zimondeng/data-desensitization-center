@@ -1,0 +1,336 @@
+:root {
+  /* --ds-* Core Semantic Palette (DESIGN.md §4.1) */
+  --ds-color-primary: #165DFF;
+  --ds-color-primary-hover: #0E42D2;
+  --ds-color-primary-active: #0A2FB6;
+  --ds-bg-active: #EBF3FF;
+  --ds-bg-page: #F5F7FA;
+  --ds-bg-panel: #F8FAFC;
+  --ds-bg-card: #FFFFFF;
+
+  --ds-text-primary: #0F172A;
+  --ds-text-secondary: #475569;
+  --ds-text-muted: #64748B;
+  --ds-text-disabled: #94A3B8;
+
+  --ds-border-subtle: #E2E8F0;
+  --ds-border-strong: #CBD5E1;
+
+  --ds-color-success: #15803D;
+  --ds-bg-success: #F0FDF4;
+  --ds-border-success: #86EFAC;
+
+  --ds-color-warning: #B45309;
+  --ds-bg-warning: #FFFBEB;
+  --ds-border-warning: #FCD34D;
+
+  --ds-color-danger-text: #B91C1C;
+  --ds-bg-danger: #FEF2F2;
+  --ds-border-danger: #FCA5A5;
+  --ds-color-danger: #DC2626;
+
+  /* 3-State Entity Span Highlight Palette (DESIGN.md §4.2) */
+  --ds-span-onnx-fg: #1E40AF;
+  --ds-span-onnx-bg: #DBEAFE;
+  --ds-span-onnx-border: #93C5FD;
+
+  --ds-span-regex-fg: #9A3412;
+  --ds-span-regex-bg: #FFEDD5;
+  --ds-span-regex-border: #FDBA74;
+
+  --ds-span-allowlist-fg: #065F46;
+  --ds-span-allowlist-bg: #D1FAE5;
+  --ds-span-allowlist-border: #10B981;
+
+  /* Typography & Radii & Spacing & Elevation (DESIGN.md §5 & §6) */
+  --ds-font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --ds-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+
+  --ds-radius-xs: 2px;
+  --ds-radius-sm: 4px;
+  --ds-radius-md: 6px;
+  --ds-radius-lg: 8px;
+
+  --ds-space-xs: 4px;
+  --ds-space-sm: 8px;
+  --ds-space-md: 12px;
+  --ds-space-lg: 16px;
+  --ds-space-xl: 24px;
+  --ds-space-xxl: 32px;
+
+  --ds-shadow-card: none;
+  --ds-shadow-hover: 0 2px 8px rgba(15, 23, 42, 0.05);
+  --ds-shadow-popover: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --ds-shadow-modal: 0 12px 32px rgba(15, 23, 42, 0.14);
+  --ds-mask-backdrop: rgba(15, 23, 42, 0.45);
+
+  --ds-motion-duration: 180ms;
+  --ds-motion-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Element Plus Variable Alignment (imported AFTER element-plus/dist/index.css) */
+  --el-color-primary: var(--ds-color-primary);
+  --el-color-primary-dark-2: var(--ds-color-primary-active);
+  --el-color-primary-light-3: var(--ds-color-primary-hover);
+  --el-color-primary-light-5: #6B9BFF;
+  --el-color-primary-light-7: #AFCBFF;
+  --el-color-primary-light-8: #D6E4FF;
+  --el-color-primary-light-9: var(--ds-bg-active);
+
+  --el-color-success: var(--ds-color-success);
+  --el-color-success-light-9: var(--ds-bg-success);
+  --el-color-warning: var(--ds-color-warning);
+  --el-color-warning-light-9: var(--ds-bg-warning);
+  --el-color-danger: var(--ds-color-danger);
+  --el-color-danger-light-9: var(--ds-bg-danger);
+
+  --el-bg-color: var(--ds-bg-card);
+  --el-bg-color-page: var(--ds-bg-page);
+  --el-fill-color-light: var(--ds-bg-panel);
+  --el-text-color-primary: var(--ds-text-primary);
+  --el-text-color-regular: var(--ds-text-secondary);
+  --el-text-color-secondary: var(--ds-text-muted);
+  --el-text-color-placeholder: var(--ds-text-muted);
+  --el-text-color-disabled: var(--ds-text-disabled);
+  --el-border-color: var(--ds-border-strong);
+  --el-border-color-light: var(--ds-border-subtle);
+  --el-border-color-lighter: var(--ds-border-subtle);
+  --el-border-radius-base: var(--ds-radius-md);
+  --el-border-radius-small: var(--ds-radius-sm);
+  --el-font-family: var(--ds-font-sans);
+  --el-overlay-color-lighter: var(--ds-mask-backdrop);
+  --el-transition-duration: var(--ds-motion-duration);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background-color: var(--ds-bg-page);
+  color: var(--ds-text-primary);
+  font-family: var(--ds-font-sans);
+  font-size: 14px;
+  line-height: 1.57;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection {
+  background-color: var(--ds-span-onnx-bg);
+  color: var(--ds-text-primary);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ds-color-primary);
+  outline-offset: 2px;
+}
+
+/* Numeric & Technical Typography Utilities */
+.ds-tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-mono {
+  font-family: var(--ds-font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+/* Single-Layer Flat-by-Default Card */
+.ds-card {
+  background-color: var(--ds-bg-card);
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-lg);
+  padding: 16px 20px;
+}
+
+.ds-panel-slot {
+  background-color: var(--ds-bg-panel);
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-md);
+}
+
+.ds-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-md);
+  margin-bottom: var(--ds-space-lg);
+}
+
+.ds-page-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ds-text-primary);
+}
+
+.ds-section-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--ds-text-primary);
+}
+
+.ds-muted-text {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--ds-text-muted);
+}
+
+.ds-secondary-text {
+  font-size: 0.875rem;
+  line-height: 1.57;
+  color: var(--ds-text-secondary);
+}
+
+/* 3-State Span Capsules (DESIGN.md §4.2) */
+.ds-span-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--ds-radius-sm);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  vertical-align: baseline;
+  word-break: break-all;
+}
+
+.ds-span-chip--onnx {
+  color: var(--ds-span-onnx-fg);
+  background-color: var(--ds-span-onnx-bg);
+  border: 1px solid var(--ds-span-onnx-border);
+}
+
+.ds-span-chip--regex {
+  color: var(--ds-span-regex-fg);
+  background-color: var(--ds-span-regex-bg);
+  border: 1px solid var(--ds-span-regex-border);
+}
+
+.ds-span-chip--allowlist {
+  color: var(--ds-span-allowlist-fg);
+  background-color: var(--ds-span-allowlist-bg);
+  border: 1px solid transparent;
+  border-bottom: 1px dashed var(--ds-span-allowlist-border);
+}
+
+.ds-span-chip__meta {
+  font-family: var(--ds-font-mono);
+  font-size: 0.75rem;
+  opacity: 0.92;
+}
+
+/* Shared Table & Inline Form Validation Utilities */
+.ds-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.ds-data-table th,
+.ds-data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ds-border-subtle);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.ds-data-table th {
+  background: var(--ds-bg-panel);
+  color: var(--ds-text-secondary);
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+.ds-field-error {
+  font-size: 0.75rem;
+  color: var(--ds-color-danger-text);
+  line-height: 1.4;
+}
+
+/* Subtle Neutral Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ds-border-strong);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ds-text-muted);
+}
+
+/* Element Plus Restraint & Alignment */
+.el-button {
+  border-radius: var(--ds-radius-md);
+  transition: background-color var(--ds-motion-duration) var(--ds-motion-ease),
+    border-color var(--ds-motion-duration) var(--ds-motion-ease),
+    color var(--ds-motion-duration) var(--ds-motion-ease);
+}
+
+.el-button.is-round {
+  border-radius: var(--ds-radius-md);
+}
+
+.el-tag {
+  border-radius: var(--ds-radius-sm);
+}
+
+.el-table th.el-table__cell {
+  background-color: var(--ds-bg-panel);
+  color: var(--ds-text-secondary);
+  font-weight: 600;
+}
+
+.el-dialog,
+.el-drawer {
+  box-shadow: var(--ds-shadow-modal);
+}
+
+.el-dialog {
+  border-radius: var(--ds-radius-lg);
+}
+
+.el-popper.is-light {
+  box-shadow: var(--ds-shadow-popover);
+  border-color: var(--ds-border-subtle);
+}
+
+/* Touch Target Floor on Narrow Viewports */
+@media (max-width: 1023px) {
+  .ds-touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* Reduced Motion Accessibility (DESIGN.md §9.3) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
