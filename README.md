@@ -12,3 +12,23 @@
 - [docs/sql/01_schema.sql](./docs/sql/01_schema.sql)：MySQL 8.0 建库与 7 张核心表完整 DDL
 - [docs/sql/02_seed_defaults.sql](./docs/sql/02_seed_defaults.sql)：预置白名单豁免规则与默认策略模板（通用严格模式 & 政务语料防误伤模式）
 - [docs/adr/](./docs/adr/)：关键架构决策记录（ADR）
+
+## Docker Compose 启动
+
+1. （可选）复制环境变量模板并按需修改端口、密钥与构建镜像源配置：
+
+```bash
+cp .env.example .env
+```
+
+2. （可选）如需启用 ONNX 语义实体识别，请将 `AstrLink Guard` 权重文件放入 `models/astrlink-guard/int8/` 目录（包含 `model_int8.onnx`、`model_int8.onnx_data`、`tokenizer.json`、`labels.json`、`config.json`）。未放置权重时服务仍可正常启动，仅 ONNX 检测规则在调用时会提示模型未就绪（`50301`），纯正则校验规则可直接运行。
+
+3. 构建并启动服务（MySQL 8.0 + FastAPI 一体托管前端）：
+
+```bash
+docker compose up -d --build
+```
+
+- 控制台与 API 地址：`http://127.0.0.1:18100`（默认管理员：`admin` / `Admin@123456`，可在 `.env` 中覆盖）
+- MySQL 宿主机映射端口：`127.0.0.1:13306`（容器内通过 `mysql:3306` 通信，避免与本机 `3306` 冲突）
+- 停止服务：`docker compose down`（如需连同数据库卷一起清理：`docker compose down -v`）

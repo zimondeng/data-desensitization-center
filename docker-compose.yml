@@ -1,0 +1,72 @@
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ds_root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-kd_desensitize}
+      MYSQL_USER: ${MYSQL_USER:-ds_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ds_password}
+      TZ: ${TZ:-UTC}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-13306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docs/sql/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./docs/sql/02_seed_defaults.sql:/docker-entrypoint-initdb.d/02_seed_defaults.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - HTTP_PROXY
+        - HTTPS_PROXY
+        - NO_PROXY
+        - PIP_INDEX_URL
+        - NPM_CONFIG_REGISTRY
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-18100}:18100"
+    environment:
+      TZ: ${TZ:-UTC}
+      DS_APP_ENV: ${DS_APP_ENV:-prod}
+      DS_HOST: 0.0.0.0
+      DS_PORT: 18100
+      DS_DATABASE_URL: ${DS_DATABASE_URL:-mysql+pymysql://${MYSQL_USER:-ds_user}:${MYSQL_PASSWORD:-ds_password}@mysql:3306/${MYSQL_DATABASE:-kd_desensitize}?charset=utf8mb4}
+      DS_AUTO_INIT_DB: ${DS_AUTO_INIT_DB:-true}
+      DS_JWT_SECRET_KEY: ${DS_JWT_SECRET_KEY:-ds-center-local-jwt-secret-key-at-least-32-bytes-long}
+      DS_JWT_EXPIRE_SECONDS: ${DS_JWT_EXPIRE_SECONDS:-28800}
+      DS_DEFAULT_ADMIN_USERNAME: ${DS_DEFAULT_ADMIN_USERNAME:-admin}
+      DS_DEFAULT_ADMIN_PASSWORD: ${DS_DEFAULT_ADMIN_PASSWORD:-Admin@123456}
+      DS_DEFAULT_ADMIN_DISPLAY_NAME: ${DS_DEFAULT_ADMIN_DISPLAY_NAME:-系统管理员}
+      DS_MASTER_AES_KEY: ${DS_MASTER_AES_KEY:-ds_default_master_aes_256_key_32}
+      DS_HASH_MASK_SALT: ${DS_HASH_MASK_SALT:-ds-center-irreversible-hash-salt-v1}
+      DS_DEFAULT_ONNX_VARIANT: ${DS_DEFAULT_ONNX_VARIANT:-int8}
+      DS_ONNX_POOL_WORKERS: ${DS_ONNX_POOL_WORKERS:-2}
+      DS_MAX_UPLOAD_BYTES: ${DS_MAX_UPLOAD_BYTES:-209715200}
+      DS_DEFAULT_ARTIFACT_TTL_HOURS: ${DS_DEFAULT_ARTIFACT_TTL_HOURS:-72}
+      DS_TTL_CLEANUP_INTERVAL_SECONDS: ${DS_TTL_CLEANUP_INTERVAL_SECONDS:-300}
+      DS_TRUST_PROXY_HEADERS: ${DS_TRUST_PROXY_HEADERS:-false}
+    volumes:
+      - ./models/astrlink-guard:/app/models/astrlink-guard:ro
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  mysql_data:
